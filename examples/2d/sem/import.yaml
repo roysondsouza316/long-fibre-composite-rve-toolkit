@@ -1,0 +1,22 @@
+mode: image
+dimension: 2
+image:
+  image_path: examples/2d/sem/sem_sample.png
+  pixel_size: 1.7058823529411764
+  threshold: 0.6000919117647059
+  invert: false
+  min_artifact_area_px: 32
+  clear_border: false
+  simplify_tolerance: 1.0
+  domain_width: 870.0
+  domain_height: 870.0
+  periodic_compatible: false
+mesh:
+  element_size_min: 5.0
+  element_size_max: 20.0
+export:
+  output_dir: outputs/2d/sem/import
+  basename: sem_2d_import
+  formats: ["msh", "xdmf"]
+solver:
+  enabled: false

@@ -1,0 +1,29 @@
+mode: sem_to_synthetic
+dimension: 2
+sem_to_synthetic:
+  image_path: examples/2d/sem/sem_sample.png
+  pixel_size: 1.7058823529411764
+  smoothing_sigma: 2.0
+  threshold: 0.42
+  separate_touching_fibres: true
+  separation_min_distance_px: 16
+  separation_peak_threshold_px: 6.0
+  min_artifact_area_px: 32
+  min_region_area_px: 700
+  ellipse_axis_ratio_threshold: 1.15
+  ellipse_sample_points: 48
+  max_candidate_overlap_fraction: 0.2
+  drop_boundary_fibres: true
+  clear_border: false
+  domain_width: 870.0
+  domain_height: 870.0
+  periodic_compatible: false
+mesh:
+  element_size_min: 5.0
+  element_size_max: 20.0
+export:
+  output_dir: outputs/2d/sem/to_synthetic
+  basename: sem_2d_to_synthetic
+  formats: ["msh", "xdmf"]
+solver:
+  enabled: false

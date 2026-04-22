@@ -1,0 +1,27 @@
+mode: synthetic
+dimension: 2
+synthetic:
+  domain_width: 1.0
+  domain_height: 1.0
+  fibre_radius: 0.035
+  target_volume_fraction: 0.22
+  min_spacing: 0.005
+  edge_clearance: 0.005
+  random_seed: 4
+  periodic_compatible: true
+mesh:
+  element_size_min: 0.01
+  element_size_max: 0.03
+export:
+  output_dir: outputs/2d/synthetic/periodic_solve
+  basename: synthetic_2d_periodic_solve
+  formats: ["msh", "xdmf"]
+solver:
+  enabled: true
+  boundary_condition: periodic
+  kinematics: plane_strain
+  matrix_youngs_modulus: 3500000000.0
+  matrix_poisson_ratio: 0.35
+  fibre_youngs_modulus: 70000000000.0
+  fibre_poisson_ratio: 0.2
+  write_vtk: true

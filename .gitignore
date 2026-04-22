@@ -1,0 +1,51 @@
+# Build / install artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# Test, lint and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Generated outputs from rve2d runs
+outputs/
+*.msh
+*.xdmf
+*.h5
+*.vtu
+*.vtk
+
+# Julia
+julia/Manifest.toml
+
+# Notebook checkpoints
+.ipynb_checkpoints/

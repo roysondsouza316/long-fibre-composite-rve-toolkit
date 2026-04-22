@@ -1,0 +1,32 @@
+mode: synthetic
+dimension: 2
+synthetic:
+  domain_width: 1.0
+  domain_height: 1.0
+  fibre_radius: 0.035
+  target_volume_fraction: 0.22
+  min_spacing: 0.005
+  edge_clearance: 0.005
+  random_seed: 9
+  periodic_compatible: false
+  orientation_deg: 30.0
+mesh:
+  element_size_min: 0.01
+  element_size_max: 0.03
+export:
+  output_dir: outputs/2d/synthetic/orthotropic_solve
+  basename: synthetic_2d_orthotropic_solve
+  formats: ["msh", "xdmf"]
+solver:
+  enabled: true
+  boundary_condition: dirichlet
+  kinematics: plane_stress
+  matrix_material_model: isotropic
+  matrix_youngs_modulus: 3500000000.0
+  matrix_poisson_ratio: 0.35
+  fibre_material_model: orthotropic
+  fibre_e1: 140000000000.0
+  fibre_e2: 12000000000.0
+  fibre_g12: 5000000000.0
+  fibre_nu12: 0.22
+  write_vtk: true

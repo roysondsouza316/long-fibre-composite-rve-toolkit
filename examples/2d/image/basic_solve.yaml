@@ -1,0 +1,26 @@
+mode: image
+dimension: 2
+image:
+  image_path: examples/2d/image/sample_mask.pgm
+  pixel_size: 0.01
+  threshold: 0.5
+  min_artifact_area_px: 4
+  clear_border: false
+  simplify_tolerance: 0.5
+  periodic_compatible: false
+mesh:
+  element_size_min: 0.002
+  element_size_max: 0.01
+export:
+  output_dir: outputs/2d/image/basic_solve
+  basename: image_2d_basic_solve
+  formats: ["msh", "xdmf"]
+solver:
+  enabled: true
+  boundary_condition: dirichlet
+  kinematics: plane_strain
+  matrix_youngs_modulus: 3500000000.0
+  matrix_poisson_ratio: 0.35
+  fibre_youngs_modulus: 70000000000.0
+  fibre_poisson_ratio: 0.2
+  write_vtk: true

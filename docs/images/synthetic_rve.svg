@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 320">
+  <rect width="600" height="320" fill="#f4efe8"/>
+  <rect x="55" y="40" width="490" height="240" rx="8" fill="#fdfbf8" stroke="#3e4a42" stroke-width="4"/>
+  <g fill="#c96d44" stroke="#7b3a1d" stroke-width="3" opacity="0.95">
+    <circle cx="120" cy="95" r="22"/><circle cx="195" cy="110" r="22"/><circle cx="275" cy="88" r="22"/>
+    <circle cx="350" cy="120" r="22"/><circle cx="430" cy="95" r="22"/><circle cx="500" cy="120" r="22"/>
+    <circle cx="150" cy="185" r="22"/><circle cx="235" cy="200" r="22"/><circle cx="315" cy="175" r="22"/>
+    <circle cx="395" cy="200" r="22"/><circle cx="475" cy="180" r="22"/>
+  </g>
+  <text x="55" y="28" font-family="Georgia, serif" font-size="22" fill="#2f362f">Synthetic circular-fibre RVE</text>
+  <text x="55" y="305" font-family="Georgia, serif" font-size="18" fill="#2f362f">Rectangular ply domain, no-overlap placement, target fibre fraction</text>
+</svg>
+

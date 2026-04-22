@@ -1,0 +1,50 @@
+mode: synthetic
+dimension: 3
+synthetic:
+  domain_width: 1.0
+  domain_height: 1.0
+  domain_depth: 0.3
+  fibre_radius: 0.05
+  target_volume_fraction: 0.2
+  min_spacing: 0.005
+  edge_clearance: 0.01
+  random_seed: 7
+  periodic_compatible: true
+mesh:
+  element_size_min: 0.03
+  element_size_max: 0.08
+export:
+  output_dir: outputs/3d/synthetic/orthotropic_solve
+  basename: synthetic_3d_orthotropic_solve
+  formats: ["msh", "xdmf"]
+solver:
+  enabled: true
+  boundary_condition: periodic
+  kinematics: solid
+  matrix_material_model: orthotropic
+  matrix_e1: 4000000000.0
+  matrix_e2: 3500000000.0
+  matrix_e3: 3200000000.0
+  matrix_g12: 1400000000.0
+  matrix_g13: 1300000000.0
+  matrix_g23: 1200000000.0
+  matrix_nu12: 0.30
+  matrix_nu13: 0.28
+  matrix_nu23: 0.27
+  matrix_material_angle_x_deg: 5.0
+  matrix_material_angle_y_deg: 0.0
+  matrix_material_angle_z_deg: 10.0
+  fibre_material_model: orthotropic
+  fibre_e1: 70000000000.0
+  fibre_e2: 12000000000.0
+  fibre_e3: 12000000000.0
+  fibre_g12: 5000000000.0
+  fibre_g13: 5000000000.0
+  fibre_g23: 4000000000.0
+  fibre_nu12: 0.20
+  fibre_nu13: 0.20
+  fibre_nu23: 0.25
+  fibre_material_angle_x_deg: 15.0
+  fibre_material_angle_y_deg: 10.0
+  fibre_material_angle_z_deg: 30.0
+  write_vtk: true

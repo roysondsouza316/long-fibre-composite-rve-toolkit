@@ -1,0 +1,18 @@
+mode: synthetic
+dimension: 2
+synthetic:
+  domain_width: 1.0
+  domain_height: 0.6
+  fibre_radius: 0.03
+  target_volume_fraction: 0.25
+  min_spacing: 0.004
+  edge_clearance: 0.002
+  random_seed: 21
+  periodic_compatible: false
+mesh:
+  element_size_min: 0.008
+  element_size_max: 0.02
+export:
+  output_dir: outputs/2d/synthetic/basic
+  basename: synthetic_2d_basic
+  formats: ["msh", "xdmf"]
