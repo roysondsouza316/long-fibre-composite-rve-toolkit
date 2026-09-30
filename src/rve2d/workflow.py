@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rve2d.config import RVEConfig
 from rve2d.exceptions import ConfigError
@@ -16,6 +17,9 @@ from rve2d.synthetic_generation.cylindrical import generate_cylindrical_fibre_rv
 from rve2d.synthetic_generation.sem_image import generate_circular_fibre_rve_from_sem
 from rve2d.validation.checks import QualityReport, validate_geometry
 
+if TYPE_CHECKING:
+    from rve2d.nonlinear.driver import NonlinearResult
+
 
 @dataclass(frozen=True)
 class BuildResult:
@@ -25,6 +29,7 @@ class BuildResult:
     quality_report: QualityReport
     geometry_metadata: dict[str, object]
     ferrite_result: FerriteSolveResult | None = None
+    nonlinear_result: NonlinearResult | None = None
 
 
 def build_rve(
@@ -82,28 +87,52 @@ def solve_with_ferrite(
     )
 
 
+def solve_nonlinear(
+    config: RVEConfig,
+    mesh_path: str | Path,
+    output_dir: str | Path,
+) -> NonlinearResult:
+    """Nonlinear RVE solve (J2 plasticity + cohesive interfaces); needs the [nonlinear] extra."""
+    from rve2d.nonlinear.driver import run_nonlinear_homogenization
+
+    return run_nonlinear_homogenization(config, mesh_path, output_dir)
+
+
 def build_and_solve_rve(
     config: RVEConfig,
     output_dir: str | None = None,
     basename: str | None = None,
 ) -> BuildResult:
+    if not config.solver.enabled and not config.nonlinear.enabled:
+        raise ConfigError(
+            "build-and-solve needs solver.enabled and/or nonlinear.enabled in the config."
+        )
     build_result = build_rve(config, output_dir=output_dir, basename=basename)
     msh_files = [path for path in build_result.mesh_files if path.suffix == ".msh"]
     if not msh_files:
-        raise ConfigError("Ferrite solve requires a generated .msh mesh file.")
-    ferrite_result = solve_with_ferrite(
-        config,
-        msh_files[0],
-        build_result.output_directory,
-        geometry_metadata=build_result.geometry_metadata,
-    )
+        raise ConfigError("Solving requires a generated .msh mesh file.")
+    metadata_files = list(build_result.metadata_files)
+    ferrite_result = None
+    if config.solver.enabled:
+        ferrite_result = solve_with_ferrite(
+            config,
+            msh_files[0],
+            build_result.output_directory,
+            geometry_metadata=build_result.geometry_metadata,
+        )
+        metadata_files.append(ferrite_result.summary_path)
+    nonlinear_result = None
+    if config.nonlinear.enabled:
+        nonlinear_result = solve_nonlinear(config, msh_files[0], build_result.output_directory)
+        metadata_files.append(nonlinear_result.summary_path)
     return BuildResult(
         output_directory=build_result.output_directory,
         mesh_files=build_result.mesh_files,
-        metadata_files=build_result.metadata_files + [ferrite_result.summary_path],
+        metadata_files=metadata_files,
         quality_report=build_result.quality_report,
         geometry_metadata=build_result.geometry_metadata,
         ferrite_result=ferrite_result,
+        nonlinear_result=nonlinear_result,
     )
 
 

@@ -11,7 +11,12 @@ sem_to_synthetic: { ... }   # required if mode == sem_to_synthetic (2D only)
 mesh: { ... }
 export: { ... }
 solver: { ... }             # optional; runs Ferrite.jl when enabled: true
+nonlinear: { ... }          # optional; plasticity + cohesive interfaces when enabled: true
 ```
+
+Unknown keys in any section are rejected with a `ConfigError` naming the key.
+Numeric fields also accept strings such as `1.0e8` (PyYAML reads exponents
+without a sign as strings).
 
 ---
 
@@ -89,6 +94,11 @@ list and validation rules):
 | `mesh_order`       | int    | `1`     |
 | `recombine`        | bool   | `false` |
 | `verbosity`        | int    | `2`     |
+| `elements_per_circle` | int | `0`     |
+
+`elements_per_circle > 0` refines the mesh along curved fibre boundaries
+(gmsh `Mesh.MeshSizeFromCurvature`), still bounded by `element_size_min`/`max`.
+Useful for cohesive interfaces, which need a well-resolved fibre perimeter.
 
 ---
 
@@ -133,3 +143,49 @@ matrix and a glass-fibre-like inclusion; override per phase.
 - 3D Ferrite solves require `kinematics: solid`.
 - Mixing `material_angle_deg` with `material_angle_x/y/z_deg` is rejected.
 - Mesh element sizes must be positive and `min <= max`.
+
+---
+
+## `nonlinear` (plasticity + cohesive interfaces)
+
+Runs only when `enabled: true`; needs `pip install -e ".[nonlinear]"`. Full
+description, units and outputs in [nonlinear.md](nonlinear.md).
+
+| Field                | Type   | Default            | Notes                                                        |
+| -------------------- | ------ | ------------------ | ------------------------------------------------------------ |
+| `enabled`            | bool   | `false`            | Master switch                                                |
+| `kinematics`         | enum   | GPS (2D) / `solid` (3D) | 2D: `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
+| `boundary_condition` | enum   | `periodic`         | `periodic` (needs `periodic_compatible: true`) or `dirichlet` |
+| `matrix`, `fibre`    | object | required           | `youngs_modulus`, `poisson_ratio`, optional `yield_stress` (omit: elastic), `hardening_modulus` (default 0) |
+| `interface`          | object | none               | Cohesive fibre/matrix interfaces; omit or `enabled: false` for perfect bonding |
+| `load`               | object | see below          | Macro load path                                              |
+| `device`             | enum   | `cpu`              | `cpu` or `cuda`                                              |
+| `linear_solver`      | enum   | `auto`             | `auto`, `pardiso`, `scipy`, `tensormesh`                     |
+| `newton_max_iterations` / `newton_tolerance` | int / float | `25` / `1e-8` | Relative residual tolerance                     |
+| `max_step_cuts`      | int    | `10`               | Max halvings of an increment before the solve stops          |
+| `output_every`       | int    | `0`                | Write VTU fields every N steps (0: final state only)         |
+| `matrix_phase_id`, `fibre_phase_id` | int | `1` / `2` | gmsh physical ids                                         |
+
+`interface`:
+
+| Field                   | Type   | Default               | Notes                                                  |
+| ----------------------- | ------ | --------------------- | ------------------------------------------------------ |
+| `law`                   | enum   | `bilinear_mixed_mode` | or `bilinear`, `linear-parabolic`, `exponential`, `trapezoidal` (mode I shape laws) |
+| `penalty_stiffness`     | float  | required              | `K`, stress / length                                   |
+| `normal_strength`       | float  | required              | `T_n`                                                  |
+| `shear_strength`        | float  | `normal_strength`     | `T_s`                                                  |
+| `mode_i_toughness`      | float  | required              | `G_Ic`, stress x length                                |
+| `mode_ii_toughness`     | float  | `mode_i_toughness`    | `G_IIc`                                                |
+| `bk_exponent`           | float  | `1.45`                | Benzeggagh–Kenane exponent                             |
+| `mixed_mode_criterion`  | enum   | `bk`                  | `bk` or `power`                                        |
+| `viscosity`             | float  | `0.0`                 | Duvaut–Lions relaxation time (fraction of the load path) |
+| `shear_penalty_stiffness` | float | `penalty_stiffness`  | Separate shear stiffness                               |
+| `integration`           | enum   | `nodal`               | `nodal` (Newton–Cotes) or `gauss`                      |
+
+`load`: `type` (`uniaxial_stress` or `uniaxial_strain`), `component`
+(`xx`, `yy`, `zz`, `yz`, `xz`, `xy`; must be active for the kinematics),
+`max_strain` (default `0.02`), `steps` (default `40`), `unload` (default `false`).
+
+Validation also checks that each toughness exceeds the elastic energy at damage
+onset (`G_c > T^2 / 2K`), that periodic solves use a periodic-compatible
+geometry, and that the mesh is linear (`mesh_order: 1`, no `recombine`).

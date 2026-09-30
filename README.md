@@ -1,8 +1,11 @@
 # rve2d-fibre
 
 `rve2d-fibre` is an open-source Python package for building **2D and 3D
-representative volume elements (RVEs)** of long-fibre composite plies and
-running linear-elastic homogenization on them via [Ferrite.jl](https://ferrite-fem.github.io/).
+representative volume elements (RVEs)** of long-fibre composite plies,
+running linear-elastic homogenization on them via [Ferrite.jl](https://ferrite-fem.github.io/),
+and running **nonlinear RVE solves** with J2 plasticity in the fibres and matrix and
+cohesive-zone fibre/matrix interfaces (PyTorch, with the traction-separation laws of
+[diffcohesive](https://pypi.org/project/diffcohesive/) and TensorMesh sparse solvers).
 
 > Despite the historical `rve2d` name, this package now supports both 2D and
 > 3D RVEs.
@@ -33,6 +36,9 @@ Pipeline stages:
 5. **Homogenization** — Ferrite.jl 2D-triangle / 3D-tetrahedral solve
 6. **Post-processing** — homogenized stiffness, engineering constants,
    stress–strain CSVs, `.vtu` for ParaView
+7. **Nonlinear RVE solve** (optional) — J2 plasticity + cohesive interfaces
+   under periodic BCs and mixed macro strain/stress control; macro
+   stress–strain curve, damage and plasticity histories, `.vtu` fields
 
 ---
 
@@ -56,6 +62,14 @@ The Julia solve stage additionally requires:
 
 If `gmsh` is not installed, geometry generation and validation still work, but
 meshing commands will fail with a clear error.
+
+The nonlinear solve (plasticity + cohesive interfaces) is pure Python and needs
+the `nonlinear` extra (PyTorch, diffcohesive, TensorMesh):
+
+```bash
+python -m pip install -e ".[gmsh,nonlinear]"
+python -m pip install pypardiso   # optional, x86 CPUs: several times faster sparse solves
+```
 
 ---
 
@@ -103,6 +117,10 @@ rve2d batch-study \
   examples/2d/synthetic/periodic_solve.yaml \
   examples/2d/image/basic_solve.yaml \
   --output-dir outputs/batch_demo
+
+# 8. Nonlinear RVE: matrix plasticity + fibre/matrix debonding (needs the nonlinear extra)
+rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml
+rve2d build-and-solve examples/3d/synthetic/nonlinear_cohesive_plastic.yaml
 ```
 
 The full picker table is in [`examples/README.md`](examples/README.md).
@@ -115,6 +133,7 @@ The full picker table is in [`examples/README.md`](examples/README.md).
 rve2d validate-config CONFIG_PATH
 rve2d build           CONFIG_PATH [--output-dir PATH] [--basename NAME]
 rve2d solve-ferrite   CONFIG_PATH MESH_PATH --output-dir PATH
+rve2d solve-nonlinear CONFIG_PATH MESH_PATH --output-dir PATH
 rve2d build-and-solve CONFIG_PATH [--output-dir PATH] [--basename NAME]
 rve2d batch-study     CONFIG_PATH [CONFIG_PATH ...] --output-dir PATH
 ```
@@ -138,6 +157,14 @@ rve2d batch-study     CONFIG_PATH [CONFIG_PATH ...] --output-dir PATH
 - `traction_response.csv`
 - `ferrite_homogenization.vtu` (when `solver.write_vtk: true`)
 
+`solve-nonlinear` (and `build-and-solve` when `nonlinear.enabled: true`) writes:
+
+- `nonlinear_response.csv` — macro strain/stress history, interface damage,
+  plasticity measures, work density
+- `nonlinear_summary.json` — peak stress, initial modulus, convergence statistics
+- `nonlinear_final.vtu` and `nonlinear_final_interface.vtu` — displacement,
+  stresses, equivalent plastic strain, interface damage and openings
+
 `batch-study` additionally writes `study_summary.csv`.
 
 ---
@@ -156,6 +183,7 @@ Top-level keys:
 | `mesh`             | object   | gmsh meshing parameters                                      |
 | `export`           | object   | Output dir, basename, formats                                |
 | `solver`           | object   | Optional Ferrite.jl material + solve settings                |
+| `nonlinear`        | object   | Optional plasticity + cohesive-interface RVE solve           |
 
 YAML and JSON are both supported. See [`docs/configuration.md`](docs/configuration.md)
 for every field, default, and example value.
@@ -183,7 +211,18 @@ src/rve2d/
 ├── meshing/gmsh_builder.py
 ├── export/writers.py
 ├── validation/checks.py
-└── ferrite_bridge.py       # subprocess driver + constitutive matrices
+├── ferrite_bridge.py       # subprocess driver + constitutive matrices
+└── nonlinear/              # plasticity + cohesive-interface RVE solver (PyTorch)
+    ├── mesh.py             # interface node duplication, cohesive elements
+    ├── constraints.py      # periodic / affine fluctuation constraints
+    ├── material.py         # J2 return mapping + consistent tangent
+    ├── cohesive.py         # cohesive elements on diffcohesive laws
+    ├── laws.py             # diffcohesive law construction (unit-safe scaling)
+    ├── assembly.py         # residual + bordered tangent
+    ├── linear_solver.py    # PARDISO / SuperLU / TensorMesh (CPU + CUDA)
+    ├── solver.py           # incremental Newton, mixed macro control
+    ├── output.py           # CSV / JSON / VTU
+    └── driver.py           # config -> solve -> files
 
 julia/
 ├── ferrite_homogenization.jl       # 2D triangle solver
@@ -230,6 +269,28 @@ periodic constraints. The Ferrite path consumes it automatically.
 
 ---
 
+## Nonlinear RVE solve: plasticity + cohesive interfaces
+
+The `nonlinear` config section runs a small-strain, rate-independent RVE solve on
+the generated mesh:
+
+- J2 plasticity with linear isotropic hardening in the matrix and/or fibres
+- zero-thickness cohesive elements on every fibre/matrix interface, with
+  diffcohesive's traction-separation laws (mixed-mode bilinear with
+  Benzeggagh–Kenane or power-law closure; bilinear, linear-parabolic,
+  exponential and trapezoidal shape laws)
+- periodic (or affine) boundary conditions with uniaxial-stress or
+  uniaxial-strain macro loading, optional unloading
+- 2D plane strain or generalized plane strain, and 3D solids
+- consistent Newton tangents (the cohesive tangent comes from autograd through
+  the law), adaptive load stepping, PARDISO / SuperLU / TensorMesh solvers on CPU
+  and TensorMesh on CUDA
+
+See [`docs/nonlinear.md`](docs/nonlinear.md) for the configuration, the
+formulation and the verification results.
+
+---
+
 ## Development
 
 ```bash
@@ -238,8 +299,10 @@ ruff check .            # lint
 mypy src/rve2d          # type-check (strict)
 ```
 
-CI runs lint + tests on Python 3.11 / 3.12 / 3.13 — see
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs lint + tests on Python 3.11 / 3.12 / 3.13, plus a job with the
+`nonlinear` extra (CPU PyTorch) — see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). The nonlinear tests are
+skipped when PyTorch or diffcohesive are not installed.
 
 ---
 

@@ -4,6 +4,8 @@
   default, and notes.
 - [Homogenization notes](homogenization.md) — what the Ferrite.jl solve does,
   the Voigt convention, and how engineering constants are derived.
+- [Nonlinear RVE solve](nonlinear.md) — J2 plasticity and cohesive
+  fibre/matrix interfaces: configuration, formulation, verification.
 - [Examples picker](../examples/README.md) — pick a starting YAML by
   dimension and input mode.
 
@@ -17,6 +19,10 @@
    homogenization stage.
 6. Use `rve2d batch-study config_a.yaml config_b.yaml --output-dir
    outputs/study` to aggregate engineering constants across multiple RVEs.
+7. Add a `nonlinear` section (and `pip install -e ".[nonlinear]"`) to run a
+   plasticity + interface-debonding solve on the same mesh, either within
+   `build-and-solve` or with `rve2d solve-nonlinear config.yaml mesh.msh
+   --output-dir out/`.
 
 ## Notes
 

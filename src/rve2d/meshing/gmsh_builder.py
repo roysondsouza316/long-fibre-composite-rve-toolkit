@@ -43,6 +43,10 @@ def build_mesh_with_gmsh(
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_config.element_size_max)
         gmsh.option.setNumber("Mesh.Algorithm", mesh_config.algorithm)
         gmsh.option.setNumber("Mesh.ElementOrder", mesh_config.mesh_order)
+        if mesh_config.elements_per_circle > 0:
+            # Resolve curved fibre boundaries: element size follows the local curvature so a
+            # full circle gets about this many elements (still bounded by the min/max sizes).
+            gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", mesh_config.elements_per_circle)
         gmsh.model.add(mesh_path.stem)
 
         if geometry.dimension == 2:
@@ -217,94 +221,56 @@ def _add_extruded_polygon_volume(gmsh: Any, polygon_fibre: ExtrudedPolygonFibre)
 
 def _classify_outer_boundaries_2d(gmsh: Any, geometry: GeometryModel) -> dict[str, list[int]]:
     assert isinstance(geometry.domain, Domain2D)
-    tolerance = max(1e-9, min(geometry.domain.width, geometry.domain.height) * 1e-6)
-    boundaries: dict[str, list[int]] = {
-        "left": [],
-        "right": [],
-        "bottom": [],
-        "top": [],
-    }
-    for _, curve_tag in gmsh.model.getEntities(dim=1):
-        x_min, y_min, _, x_max, y_max, _ = gmsh.model.getBoundingBox(1, curve_tag)
-        is_left = (
-            abs(x_min - geometry.domain.origin_x) < tolerance
-            and abs(x_max - geometry.domain.origin_x) < tolerance
-        )
-        is_right = (
-            abs(x_min - geometry.domain.x_max) < tolerance
-            and abs(x_max - geometry.domain.x_max) < tolerance
-        )
-        is_bottom = (
-            abs(y_min - geometry.domain.origin_y) < tolerance
-            and abs(y_max - geometry.domain.origin_y) < tolerance
-        )
-        is_top = (
-            abs(y_min - geometry.domain.y_max) < tolerance
-            and abs(y_max - geometry.domain.y_max) < tolerance
-        )
-        if is_left:
-            boundaries["left"].append(curve_tag)
-        elif is_right:
-            boundaries["right"].append(curve_tag)
-        elif is_bottom:
-            boundaries["bottom"].append(curve_tag)
-        elif is_top:
-            boundaries["top"].append(curve_tag)
-    return boundaries
+    domain = geometry.domain
+    planes = (
+        ("left", 0, domain.origin_x),
+        ("right", 0, domain.x_max),
+        ("bottom", 1, domain.origin_y),
+        ("top", 1, domain.y_max),
+    )
+    return _classify_by_plane(gmsh, 1, planes, max(domain.width, domain.height))
 
 
 def _classify_outer_boundaries_3d(gmsh: Any, geometry: GeometryModel) -> dict[str, list[int]]:
     assert isinstance(geometry.domain, Domain3D)
-    tolerance = max(
-        1e-9,
-        min(geometry.domain.width, geometry.domain.height, geometry.domain.depth) * 1e-6,
+    domain = geometry.domain
+    planes = (
+        ("left", 0, domain.origin_x),
+        ("right", 0, domain.x_max),
+        ("front", 1, domain.origin_y),
+        ("back", 1, domain.y_max),
+        ("bottom", 2, domain.origin_z),
+        ("top", 2, domain.z_max),
     )
-    boundaries: dict[str, list[int]] = {
-        "left": [],
-        "right": [],
-        "front": [],
-        "back": [],
-        "bottom": [],
-        "top": [],
-    }
-    for _, surface_tag in gmsh.model.getEntities(dim=2):
-        x_min, y_min, z_min, x_max, y_max, z_max = gmsh.model.getBoundingBox(2, surface_tag)
-        is_left = (
-            abs(x_min - geometry.domain.origin_x) < tolerance
-            and abs(x_max - geometry.domain.origin_x) < tolerance
-        )
-        is_right = (
-            abs(x_min - geometry.domain.x_max) < tolerance
-            and abs(x_max - geometry.domain.x_max) < tolerance
-        )
-        is_front = (
-            abs(y_min - geometry.domain.origin_y) < tolerance
-            and abs(y_max - geometry.domain.origin_y) < tolerance
-        )
-        is_back = (
-            abs(y_min - geometry.domain.y_max) < tolerance
-            and abs(y_max - geometry.domain.y_max) < tolerance
-        )
-        is_bottom = (
-            abs(z_min - geometry.domain.origin_z) < tolerance
-            and abs(z_max - geometry.domain.origin_z) < tolerance
-        )
-        is_top = (
-            abs(z_min - geometry.domain.z_max) < tolerance
-            and abs(z_max - geometry.domain.z_max) < tolerance
-        )
-        if is_left:
-            boundaries["left"].append(surface_tag)
-        elif is_right:
-            boundaries["right"].append(surface_tag)
-        elif is_front:
-            boundaries["front"].append(surface_tag)
-        elif is_back:
-            boundaries["back"].append(surface_tag)
-        elif is_bottom:
-            boundaries["bottom"].append(surface_tag)
-        elif is_top:
-            boundaries["top"].append(surface_tag)
+    return _classify_by_plane(gmsh, 2, planes, max(domain.width, domain.height, domain.depth))
+
+
+def _classify_by_plane(
+    gmsh: Any,
+    entity_dim: int,
+    planes: tuple[tuple[str, int, float], ...],
+    domain_size: float,
+) -> dict[str, list[int]]:
+    """Assign boundary curves (2D) or surfaces (3D) to the outer faces of the domain.
+
+    Membership is decided from exact geometry -- the entity's centre of mass and all of its
+    boundary vertices must lie on the face plane -- rather than from bounding boxes, which
+    OpenCASCADE pads by an absolute ~1e-7 and so misclassifies RVEs whose size is given in
+    millimetres or metres (e.g. a 0.06 mm window).
+    """
+    tolerance = 1e-7 * domain_size
+    boundaries: dict[str, list[int]] = {name: [] for name, _, _ in planes}
+    for _, tag in gmsh.model.getEntities(dim=entity_dim):
+        samples = [gmsh.model.occ.getCenterOfMass(entity_dim, tag)]
+        for sub_dim, sub_tag in gmsh.model.getBoundary(
+            [(entity_dim, tag)], combined=False, oriented=False, recursive=True
+        ):
+            if sub_dim == 0:
+                samples.append(gmsh.model.getValue(0, sub_tag, []))
+        for name, axis, value in planes:
+            if all(abs(point[axis] - value) <= tolerance for point in samples):
+                boundaries[name].append(tag)
+                break
     return boundaries
 
 

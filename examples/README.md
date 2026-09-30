@@ -32,6 +32,8 @@ examples/
 | 3D rotated orthotropic phases (workflow angles)  | `3d/synthetic/workflow_oriented_solve.yaml`         |
 | 3D RVE from an extruded 2D mask                  | `3d/image/extruded.yaml`                            |
 | Same with periodic homogenization                | `3d/image/extruded_periodic_solve.yaml`             |
+| 2D plasticity + fibre/matrix debonding (nonlinear) | `2d/synthetic/nonlinear_cohesive_plastic.yaml`    |
+| 3D plasticity + fibre/matrix debonding (nonlinear) | `3d/synthetic/nonlinear_cohesive_plastic.yaml`    |
 
 ## Run from the repository root
 
@@ -39,7 +41,13 @@ examples/
 rve2d validate-config examples/2d/synthetic/basic.yaml
 rve2d build           examples/2d/synthetic/basic.yaml
 rve2d build-and-solve examples/2d/synthetic/periodic_solve.yaml
+rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml   # needs .[nonlinear]
 ```
+
+The nonlinear examples use mm / MPa / N/mm units. On a 4-core CPU with
+`pypardiso` installed, the 2D example solves in about 20 s and the 3D one in
+about 40 s; SciPy's SuperLU fallback is slower. See
+[`docs/nonlinear.md`](../docs/nonlinear.md).
 
 `image_path` and `output_dir` in each config are relative to the directory
 where you launch `rve2d`, *not* relative to the YAML file. Run from the repo

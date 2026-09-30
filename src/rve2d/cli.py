@@ -8,7 +8,7 @@ from typing import Any
 
 from rve2d.config import load_config
 from rve2d.study import run_batch_study
-from rve2d.workflow import build_and_solve_rve, build_rve, solve_with_ferrite
+from rve2d.workflow import build_and_solve_rve, build_rve, solve_nonlinear, solve_with_ferrite
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,6 +39,17 @@ def main(argv: list[str] | None = None) -> int:
     solve_parser.add_argument("config_path", type=Path)
     solve_parser.add_argument("mesh_path", type=Path)
     solve_parser.add_argument("--output-dir", type=Path, required=True)
+
+    nonlinear_parser = subparsers.add_parser(
+        "solve-nonlinear",
+        help=(
+            "Run the nonlinear RVE solve (plasticity + cohesive interfaces) on an existing "
+            ".msh mesh."
+        ),
+    )
+    nonlinear_parser.add_argument("config_path", type=Path)
+    nonlinear_parser.add_argument("mesh_path", type=Path)
+    nonlinear_parser.add_argument("--output-dir", type=Path, required=True)
 
     build_solve_parser = subparsers.add_parser(
         "build-and-solve",
@@ -104,6 +115,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(solve_payload, indent=2))
         return 0
 
+    if args.command == "solve-nonlinear":
+        nonlinear = solve_nonlinear(config, args.mesh_path, args.output_dir)
+        print(json.dumps(_nonlinear_payload(nonlinear), indent=2))
+        return 0
+
     builder = build_rve if args.command == "build" else build_and_solve_rve
     result = builder(
         config,
@@ -128,5 +144,18 @@ def main(argv: list[str] | None = None) -> int:
             "engineering_constants": result.ferrite_result.engineering_constants,
             "response_files": [str(path) for path in result.ferrite_result.response_files],
         }
+    if result.nonlinear_result is not None:
+        payload["nonlinear"] = _nonlinear_payload(result.nonlinear_result)
     print(json.dumps(payload, indent=2))
     return 0
+
+
+def _nonlinear_payload(result: Any) -> dict[str, Any]:
+    return {
+        "summary_path": str(result.summary_path),
+        "response_csv": str(result.response_path),
+        "field_files": [str(path) for path in result.field_files],
+        "completed": result.completed,
+        "peak_stress": result.peak_stress,
+        "strain_at_peak": result.strain_at_peak,
+    }

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 
@@ -93,6 +93,7 @@ class MeshConfig:
     mesh_order: int = 1
     recombine: bool = False
     verbosity: int = 2
+    elements_per_circle: int = 0
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,71 @@ class FerriteSolveConfig:
 
 
 @dataclass(frozen=True)
+class PhaseMaterialConfig:
+    """Isotropic elastic phase with optional J2 plasticity (linear isotropic hardening)."""
+
+    youngs_modulus: float
+    poisson_ratio: float
+    yield_stress: float | None = None
+    hardening_modulus: float = 0.0
+
+
+@dataclass(frozen=True)
+class CohesiveInterfaceConfig:
+    """Fibre/matrix cohesive interface (traction-separation law from diffcohesive)."""
+
+    enabled: bool = True
+    law: Literal[
+        "bilinear_mixed_mode", "bilinear", "linear-parabolic", "exponential", "trapezoidal"
+    ] = "bilinear_mixed_mode"
+    penalty_stiffness: float | None = None
+    normal_strength: float | None = None
+    shear_strength: float | None = None
+    mode_i_toughness: float | None = None
+    mode_ii_toughness: float | None = None
+    bk_exponent: float = 1.45
+    mixed_mode_criterion: Literal["bk", "power"] = "bk"
+    viscosity: float = 0.0
+    shear_penalty_stiffness: float | None = None
+    integration: Literal["nodal", "gauss"] = "nodal"
+
+
+@dataclass(frozen=True)
+class NonlinearLoadConfig:
+    type: Literal["uniaxial_stress", "uniaxial_strain"] = "uniaxial_stress"
+    component: Literal["xx", "yy", "zz", "yz", "xz", "xy"] = "xx"
+    max_strain: float = 0.02
+    steps: int = 40
+    unload: bool = False
+
+
+@dataclass(frozen=True)
+class NonlinearSolveConfig:
+    """Nonlinear RVE solve: J2 plasticity in both phases plus cohesive fibre/matrix interfaces."""
+
+    enabled: bool = False
+    kinematics: Literal["plane_strain", "generalized_plane_strain", "solid"] | None = None
+    boundary_condition: Literal["periodic", "dirichlet"] = "periodic"
+    matrix: PhaseMaterialConfig | None = None
+    fibre: PhaseMaterialConfig | None = None
+    interface: CohesiveInterfaceConfig | None = None
+    load: NonlinearLoadConfig = field(default_factory=NonlinearLoadConfig)
+    device: str = "cpu"
+    linear_solver: Literal["auto", "scipy", "pardiso", "tensormesh"] = "auto"
+    newton_max_iterations: int = 25
+    newton_tolerance: float = 1.0e-8
+    max_step_cuts: int = 10
+    output_every: int = 0
+    matrix_phase_id: int = 1
+    fibre_phase_id: int = 2
+
+    def resolved_kinematics(self, dimension: int) -> str:
+        if self.kinematics is not None:
+            return self.kinematics
+        return "solid" if dimension == 3 else "generalized_plane_strain"
+
+
+@dataclass(frozen=True)
 class RVEConfig:
     mode: Literal["synthetic", "image", "sem_to_synthetic"]
     dimension: Literal[2, 3] = 2
@@ -159,6 +225,7 @@ class RVEConfig:
     mesh: MeshConfig = field(default_factory=MeshConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     solver: FerriteSolveConfig = field(default_factory=FerriteSolveConfig)
+    nonlinear: NonlinearSolveConfig = field(default_factory=NonlinearSolveConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -184,19 +251,24 @@ def config_from_dict(payload: dict[str, Any]) -> RVEConfig:
         dimension=payload.get("dimension", 2),
         mode=mode,
         synthetic=(
-            SyntheticGenerationConfig(**synthetic_payload)
+            _section(SyntheticGenerationConfig, synthetic_payload, "synthetic")
             if synthetic_payload is not None
             else None
         ),
-        image=ImageImportConfig(**image_payload) if image_payload is not None else None,
+        image=(
+            _section(ImageImportConfig, image_payload, "image")
+            if image_payload is not None
+            else None
+        ),
         sem_to_synthetic=(
-            SemToSyntheticConfig(**sem_to_synthetic_payload)
+            _section(SemToSyntheticConfig, sem_to_synthetic_payload, "sem_to_synthetic")
             if sem_to_synthetic_payload is not None
             else None
         ),
-        mesh=MeshConfig(**payload.get("mesh", {})),
-        export=ExportConfig(**payload.get("export", {})),
-        solver=FerriteSolveConfig(**payload.get("solver", {})),
+        mesh=_section(MeshConfig, payload.get("mesh", {}), "mesh"),
+        export=_section(ExportConfig, payload.get("export", {}), "export"),
+        solver=_section(FerriteSolveConfig, payload.get("solver", {}), "solver"),
+        nonlinear=_nonlinear_from_dict(payload.get("nonlinear")),
     )
     _validate_config(config)
     return config
@@ -233,9 +305,12 @@ def _validate_config(config: RVEConfig) -> None:
         raise ConfigError("Mesh element sizes must be positive.")
     if config.mesh.element_size_min > config.mesh.element_size_max:
         raise ConfigError("Mesh minimum element size cannot exceed the maximum.")
+    if config.mesh.elements_per_circle < 0:
+        raise ConfigError("mesh.elements_per_circle must be zero (off) or positive.")
     if not config.export.formats:
         raise ConfigError("At least one export format must be configured.")
     _validate_solver(config)
+    _validate_nonlinear(config)
 
 
 def _validate_synthetic(config: SyntheticGenerationConfig, dimension: int) -> None:
@@ -449,3 +524,158 @@ def _validate_3d_rotation_inputs(
         raise ConfigError(
             f"3D {label} material rotation cannot mix material_angle_deg with x/y/z rotations."
         )
+
+
+def _section(cls: Any, payload: Any, name: str) -> Any:
+    """Build a dataclass section, reporting unknown or missing keys as ConfigError.
+
+    Numeric strings in float fields are converted: YAML 1.1 (PyYAML) reads an exponent
+    without a sign, e.g. ``1.0e8``, as text rather than as a number.
+    """
+    if not isinstance(payload, dict):
+        raise ConfigError(f"Config section '{name}' must be a mapping.")
+    types = {f.name: str(f.type) for f in fields(cls)}
+    unknown = sorted(set(payload) - set(types))
+    if unknown:
+        raise ConfigError(f"Unknown key(s) in '{name}': {', '.join(unknown)}.")
+    data = dict(payload)
+    for key, value in payload.items():
+        if isinstance(value, str) and "float" in types[key] and "list" not in types[key]:
+            try:
+                data[key] = float(value)
+            except ValueError as exc:
+                raise ConfigError(f"'{name}.{key}' must be a number, got {value!r}.") from exc
+    try:
+        return cls(**data)
+    except TypeError as exc:
+        raise ConfigError(f"Invalid '{name}' section: {exc}") from exc
+
+
+def _nonlinear_from_dict(payload: Any) -> NonlinearSolveConfig:
+    if payload is None:
+        return NonlinearSolveConfig()
+    if not isinstance(payload, dict):
+        raise ConfigError("Config section 'nonlinear' must be a mapping.")
+    data = dict(payload)
+    for key, cls in (("matrix", PhaseMaterialConfig), ("fibre", PhaseMaterialConfig)):
+        if data.get(key) is not None:
+            data[key] = _section(cls, data[key], f"nonlinear.{key}")
+    if data.get("interface") is not None:
+        data["interface"] = _section(
+            CohesiveInterfaceConfig, data["interface"], "nonlinear.interface"
+        )
+    if data.get("load") is not None:
+        data["load"] = _section(NonlinearLoadConfig, data["load"], "nonlinear.load")
+    return cast(NonlinearSolveConfig, _section(NonlinearSolveConfig, data, "nonlinear"))
+
+
+def _default(value: float | None, default: float) -> float:
+    return default if value is None else value
+
+
+_ACTIVE_COMPONENTS = {
+    "plane_strain": ("xx", "yy", "xy"),
+    "generalized_plane_strain": ("xx", "yy", "zz", "xy"),
+    "solid": ("xx", "yy", "zz", "yz", "xz", "xy"),
+}
+
+
+def _validate_nonlinear(config: RVEConfig) -> None:
+    nl = config.nonlinear
+    if not nl.enabled:
+        return
+    kinematics = nl.resolved_kinematics(config.dimension)
+    if config.dimension == 3 and kinematics != "solid":
+        raise ConfigError("3D nonlinear solves require kinematics: solid.")
+    if config.dimension == 2 and kinematics == "solid":
+        raise ConfigError("2D nonlinear solves use plane_strain or generalized_plane_strain.")
+    if nl.boundary_condition == "periodic":
+        periodic = (
+            (
+                config.mode == "synthetic"
+                and bool(config.synthetic and config.synthetic.periodic_compatible)
+            )
+            or (config.mode == "image" and bool(config.image and config.image.periodic_compatible))
+            or (
+                config.mode == "sem_to_synthetic"
+                and bool(config.sem_to_synthetic and config.sem_to_synthetic.periodic_compatible)
+            )
+        )
+        if not periodic:
+            raise ConfigError("Periodic nonlinear solves require a periodic_compatible geometry.")
+    if config.mesh.mesh_order != 1 or config.mesh.recombine:
+        raise ConfigError(
+            "The nonlinear solver needs linear triangles/tetrahedra (mesh_order: 1, no recombine)."
+        )
+    for label, phase in (("matrix", nl.matrix), ("fibre", nl.fibre)):
+        if phase is None:
+            raise ConfigError(
+                f"nonlinear.{label} material (youngs_modulus, poisson_ratio, ...) is required."
+            )
+        if phase.youngs_modulus <= 0.0:
+            raise ConfigError(f"nonlinear.{label}.youngs_modulus must be positive.")
+        if not -1.0 < phase.poisson_ratio < 0.5:
+            raise ConfigError(f"nonlinear.{label}.poisson_ratio must lie in (-1, 0.5).")
+        if phase.yield_stress is not None and phase.yield_stress <= 0.0:
+            raise ConfigError(
+                f"nonlinear.{label}.yield_stress must be positive (or omitted for elastic)."
+            )
+        if phase.hardening_modulus < 0.0:
+            raise ConfigError(f"nonlinear.{label}.hardening_modulus must be non-negative.")
+    interface = nl.interface
+    if interface is not None and interface.enabled:
+        required = ("penalty_stiffness", "normal_strength", "mode_i_toughness")
+        missing = [key for key in required if getattr(interface, key) is None]
+        if missing:
+            raise ConfigError("nonlinear.interface requires: " + ", ".join(missing) + ".")
+        assert interface.penalty_stiffness is not None and interface.normal_strength is not None
+        assert interface.mode_i_toughness is not None
+        stiffness = interface.penalty_stiffness
+        pairs = [
+            (interface.normal_strength, interface.mode_i_toughness, stiffness, "normal / mode I")
+        ]
+        if interface.law == "bilinear_mixed_mode":
+            pairs.append(
+                (
+                    _default(interface.shear_strength, interface.normal_strength),
+                    _default(interface.mode_ii_toughness, interface.mode_i_toughness),
+                    _default(interface.shear_penalty_stiffness, stiffness),
+                    "shear / mode II",
+                )
+            )
+        elif interface.viscosity > 0.0:
+            raise ConfigError(
+                "nonlinear.interface.viscosity is available for law: bilinear_mixed_mode only."
+            )
+        for strength, toughness, k, label in pairs:
+            if min(strength, toughness, k) <= 0.0:
+                raise ConfigError(
+                    f"nonlinear.interface {label}: strength, toughness and stiffness must be "
+                    "positive."
+                )
+            if toughness <= strength**2 / (2.0 * k):
+                raise ConfigError(
+                    f"nonlinear.interface {label}: toughness {toughness:g} must exceed "
+                    f"strength^2 / (2 K) = {strength**2 / (2.0 * k):g} "
+                    "(otherwise the final opening "
+                    "precedes damage onset)."
+                )
+        if interface.integration not in ("nodal", "gauss"):
+            raise ConfigError("nonlinear.interface.integration must be 'nodal' or 'gauss'.")
+        if interface.bk_exponent <= 0.0 or interface.viscosity < 0.0:
+            raise ConfigError(
+                "nonlinear.interface: bk_exponent must be positive and viscosity non-negative."
+            )
+    load = nl.load
+    if load.component not in _ACTIVE_COMPONENTS[kinematics]:
+        raise ConfigError(
+            f"nonlinear.load.component {load.component!r} is not active for {kinematics} "
+            f"(choose from {', '.join(_ACTIVE_COMPONENTS[kinematics])})."
+        )
+    if load.max_strain == 0.0 or load.steps < 1:
+        raise ConfigError("nonlinear.load needs a non-zero max_strain and at least one step.")
+    if nl.newton_max_iterations < 1 or nl.newton_tolerance <= 0.0 or nl.max_step_cuts < 0:
+        raise ConfigError("nonlinear Newton settings must be positive.")
+    if not (nl.device == "cpu" or nl.device.startswith("cuda")):
+        raise ConfigError("nonlinear.device must be 'cpu' or 'cuda[:index]'.")
+

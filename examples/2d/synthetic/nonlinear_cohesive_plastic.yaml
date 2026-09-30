@@ -1,0 +1,48 @@
+# Transverse tension of a glass/epoxy UD ply cross-section with fibre/matrix debonding
+# (cohesive interfaces) and matrix plasticity. Units: mm, MPa (N/mm^2); toughness in N/mm
+# (1 J/m^2 = 0.001 N/mm). Needs: pip install -e ".[gmsh,nonlinear]"
+mode: synthetic
+dimension: 2
+synthetic:
+  domain_width: 0.03          # 30 um window
+  domain_height: 0.03
+  fibre_radius: 0.0035        # 7 um diameter fibres
+  target_volume_fraction: 0.40
+  min_spacing: 0.0003
+  edge_clearance: 0.0003
+  random_seed: 11
+  periodic_compatible: true
+mesh:
+  element_size_min: 0.0003
+  element_size_max: 0.0015
+  elements_per_circle: 40     # resolve the interface: ~40 cohesive elements per fibre
+  verbosity: 0
+export:
+  output_dir: outputs/2d/synthetic/nonlinear_cohesive_plastic
+  basename: synthetic_2d_nonlinear
+  formats: ["msh"]
+nonlinear:
+  enabled: true
+  kinematics: generalized_plane_strain
+  boundary_condition: periodic
+  matrix:                     # epoxy, J2 plasticity with linear hardening
+    youngs_modulus: 3500.0
+    poisson_ratio: 0.35
+    yield_stress: 60.0
+    hardening_modulus: 300.0
+  fibre:                      # glass; a yield_stress here would make the fibres plastic too
+    youngs_modulus: 70000.0
+    poisson_ratio: 0.2
+  interface:
+    law: bilinear_mixed_mode
+    penalty_stiffness: 1.0e8  # N/mm^3
+    normal_strength: 50.0
+    shear_strength: 75.0
+    mode_i_toughness: 0.002   # 2 J/m^2
+    mode_ii_toughness: 0.006
+    bk_exponent: 1.45
+  load:
+    type: uniaxial_stress
+    component: xx
+    max_strain: 0.02
+    steps: 40
