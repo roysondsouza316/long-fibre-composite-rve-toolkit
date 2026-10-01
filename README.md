@@ -5,11 +5,14 @@ representative volume elements (RVEs)** of long-fibre composite plies and solvin
 
 - **linear homogenization**: the effective stiffness and engineering constants of the RVE
   under periodic or affine boundary conditions;
-- **nonlinear RVE solves**: J2 plasticity in the fibres and matrix and cohesive-zone
-  fibre/matrix interfaces (debonding) under mixed macro strain/stress control;
-- **laminates**: ply properties from the RVE, then for any stacking sequence the ABD
-  matrix, engineering constants and 3D effective stiffness, and a laminate tensile test
-  (stress–strain curve, elongation and force).
+- **nonlinear RVE solves**: J2 or pressure-dependent (paraboloidal) plasticity with linear
+  or saturating hardening and ductile damage in the fibres and matrix, and cohesive-zone
+  fibre/matrix interfaces (debonding), under mixed macro strain/stress control;
+- **laminates**: ply properties and strengths from the RVE, then for any stacking sequence
+  the ABD matrix, engineering constants and 3D effective stiffness, and coupon tests in
+  tension, compression or shear (stress–strain curve, elongation, force, first ply and
+  fibre failure) with four ply damage models: maximum stress, Hashin, continuum damage and
+  the RVE curves themselves.
 
 The solves run on either of **two interchangeable engines** that give the same results
 to round-off:
@@ -49,10 +52,12 @@ Pipeline stages:
 4. **Export**: `.msh`, `.xdmf` (or any meshio format), JSON metadata bundle
 5. **Linear homogenization** (optional, `solver` section): effective stiffness,
    engineering constants, stress–strain and traction CSVs, `.vtu` fields for ParaView
-6. **Nonlinear RVE solve** (optional, `nonlinear` section): J2 plasticity + cohesive
-   interfaces; macro stress–strain curve, damage and plasticity histories, `.vtu` fields
+6. **Nonlinear RVE solve** (optional, `nonlinear` section): plasticity (J2 or
+   pressure-dependent), ductile damage and cohesive interfaces; macro stress–strain curve,
+   damage and plasticity histories, `.vtu` fields
 7. **Laminate pipeline** (optional, `laminate` section, `rve2d laminate`): ply properties
-   from stages 5–6, then stiffness and tensile test of every stacking sequence
+   and strengths from stages 5–6, then stiffness and coupon tests (tension, compression,
+   shear; four ply damage models) of every stacking sequence
 
 ---
 
@@ -105,9 +110,10 @@ TensorMesh engine's former name, is still accepted.)
 
 Which is faster depends on the job (4-core CPU): the TensorMesh engine is faster for small
 linear problems (Julia spends about 4 s starting up) and as fast as Julia for the 2D
-nonlinear example (40 s against 38 s); the Julia engine is faster for the 3D nonlinear
-example (41 s against 59 s) and about 5× faster for large 3D linear homogenization
-(150,000 unknowns: 43 s against 208 s). Only the TensorMesh engine runs on a GPU.
+nonlinear example (42 s each); the Julia engine is faster for the 3D nonlinear example
+(50 s against 66 s), for RVEs with a pressure-dependent, damaging matrix (the laminate
+damage pipelines) and about 5× faster for large 3D linear homogenization (150,000
+unknowns: 43 s against 208 s). Only the TensorMesh engine runs on a GPU.
 See the performance sections of [`docs/nonlinear.md`](docs/nonlinear.md#performance) and
 [`docs/homogenization.md`](docs/homogenization.md#performance).
 
@@ -127,7 +133,7 @@ examples/
 ├── 3d/
 │   ├── synthetic/   # random cylindrical fibres in a box
 │   └── image/       # 2D mask extruded into a 3D box
-└── pipelines/       # RVE → ply → laminates (stacking sequences, tensile test)
+└── pipelines/       # RVE → ply → laminates (stacking sequences, damage, coupon tests)
     ├── tensormesh/  # the same pipelines on the TensorMesh engine ...
     └── julia/       # ... and on the Julia engine
 ```
@@ -168,9 +174,10 @@ rve2d batch-study \
 rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml
 rve2d build-and-solve examples/3d/synthetic/nonlinear_cohesive_plastic.yaml --engine julia
 
-# 10. Laminates: stiffness of several stacking sequences (seconds), then the tensile test
+# 10. Laminates: stiffness of several stacking sequences (seconds), then glass/epoxy
+#     tension and compression tests with four ply damage models (minutes)
 rve2d laminate examples/pipelines/tensormesh/laminate_stiffness_2d.yaml
-rve2d laminate examples/pipelines/julia/laminate_tensile_2d.yaml
+rve2d laminate examples/pipelines/julia/laminate_damage_2d.yaml
 ```
 
 The full picker table is in [`examples/README.md`](examples/README.md).
@@ -239,11 +246,11 @@ shows the full Python traceback instead.
 `--fail-fast` is given).
 
 `laminate` writes `rve/` (the RVE build), `ply/` (the RVE solves and
-`ply_properties.json`), `laminates/summary.csv` (one row per stacking sequence),
+`ply_properties.json`), `laminates/summary.csv` (stiffness, one row per stacking
+sequence), `laminates/coupon_tests.csv` (one row per laminate, damage model and test),
 `laminates/<sequence>/` (`abd.csv`, `effective_3d_stiffness.csv`, `constants.json` and,
-with the tensile test, `tensile_test.csv` and `tensile_test_summary.json`),
-`laminates/tensile_tests.png` and `pipeline_summary.json`; see
-[`docs/laminate.md`](docs/laminate.md).
+with coupon tests, `<model>/<test>.csv` and `<model>/<test>_summary.json`), plots and
+`pipeline_summary.json`; see [`docs/laminate.md`](docs/laminate.md).
 
 ---
 
@@ -261,8 +268,8 @@ Top-level keys:
 | `mesh`             | object   | gmsh meshing parameters                                      |
 | `export`           | object   | Output dir, basename, formats                                |
 | `solver`           | object   | Optional linear homogenization: engine, kinematics, BCs, materials |
-| `nonlinear`        | object   | Optional plasticity + cohesive-interface RVE solve           |
-| `laminate`         | object   | Optional laminate pipeline: ply thickness, stacking sequences, tensile test |
+| `nonlinear`        | object   | Optional plasticity, damage and cohesive-interface RVE solve |
+| `laminate`         | object   | Optional laminate pipeline: ply thickness, stacking sequences, damage models, strengths, coupon tests |
 
 YAML and JSON are both supported. See [`docs/configuration.md`](docs/configuration.md)
 for every field, default, and example value.
@@ -292,9 +299,10 @@ src/rve2d/
 ├── validation/checks.py
 ├── laminate/               # engine-independent: works on the RVE results
 │   ├── stacking.py         # stacking-sequence notation: [0/±45/90]2s, [0_2/90]T, ...
-│   ├── ply.py              # ply stiffness and stress–strain curves from the RVE results
+│   ├── ply.py              # ply stiffness, curves and strengths from the RVE results
 │   ├── clt.py              # ABD matrix, engineering constants, 3D effective stiffness
-│   ├── tensile.py          # laminate tensile test: stress, strain, elongation, force
+│   ├── damage.py           # ply damage models: max stress, Hashin, continuum damage, RVE curves
+│   ├── coupon.py           # coupon test: stress, strain, elongation, force, failure events
 │   └── pipeline.py         # `rve2d laminate`: RVE -> ply -> laminates
 └── engines/
     ├── __init__.py         # homogenize() / solve_nonlinear(): dispatch to the chosen engine
@@ -356,7 +364,9 @@ verification.
 The `nonlinear` config section runs a small-strain, rate-independent RVE solve on
 the generated mesh:
 
-- J2 plasticity with linear isotropic hardening in the matrix and/or fibres
+- J2 plasticity, or the pressure-dependent paraboloidal plasticity of epoxies, with linear
+  or saturating (Voce) hardening and optional ductile damage regularised by the element
+  size, in the matrix and/or fibres
 - zero-thickness cohesive elements on every fibre/matrix interface, with
   diffcohesive's traction-separation laws (mixed-mode bilinear with
   Benzeggagh–Kenane or power-law closure; bilinear, linear-parabolic,
@@ -377,7 +387,7 @@ formulation and the verification results.
 
 ---
 
-## Laminates: stacking sequences, stiffness and tensile test
+## Laminates: stacking sequences, stiffness, damage and coupon tests
 
 `rve2d laminate CONFIG` turns the RVE into plies and the plies into laminates. It runs on
 either engine (only the RVE solves depend on it) for 2D and 3D RVEs:
@@ -385,32 +395,42 @@ either engine (only the RVE solves depend on it) for 2D and 3D RVEs:
 1. **Ply stiffness**: the linear homogenization of the RVE (generalized plane strain in 2D,
    solid in 3D) with the fibres along the ply's axis 1; optionally averaged to transverse
    isotropy.
-2. **Ply curves** (for the tensile test): nonlinear RVE solves under uniaxial stress give the
-   transverse (RVE `xx`) and in-plane shear (RVE `xz`) stress–strain curves. For a 2D RVE the
-   shear runs on one periodic layer of tetrahedra extruded from its mesh: the exact
-   z-invariant 3D problem at a few times the cost of the 2D solve.
+2. **Ply curves and strengths** (for the coupon tests): nonlinear RVE solves under uniaxial
+   stress give the transverse tension and compression (RVE `xx`) and in-plane shear (RVE
+   `xz`) stress–strain curves, whose peaks are the strengths Yt, Yc and S12 unless given.
+   For a 2D RVE the shear runs on one periodic layer of tetrahedra extruded from its mesh:
+   the exact z-invariant 3D problem at a few times the cost of the 2D solve. The
+   fibre-direction strengths Xt and Xc are inputs.
 3. **Laminates**: for every entry of `stacking_sequences` (`[0/90]s`, `[0/±45/90]2s`,
    `[0_2/90]T`, `[(±45)2/0]`, ...): the ABD matrix, membrane and flexural engineering
    constants, coupling flags and the 3D effective stiffness of the stack.
-4. **Tensile test** (optional): strain-controlled in x, y or xy with the other resultants and
-   moments zero; plies follow the RVE curves (secant law with damage memory) and fail in the
-   fibre direction at the given strengths. Output: stress–strain curve, damage events,
-   elongation over `gauge_length` and force over `width`.
+4. **Coupon tests** (optional): strain controlled in x, y or xy, in tension or compression,
+   with the other resultants and moments zero, for each ply damage model in
+   `damage_models`: `max_stress` (maximum stress criterion, ply discount), `hashin`
+   (Hashin's criteria, progressive degradation), `continuum_damage` (Hashin-initiated
+   damage with energy-regularised softening) and `rve_curves` (the RVE curves as ply laws).
+   Output: stress–strain curve, first ply and fibre failure, peak, elongation over
+   `gauge_length` and force over `width`.
 
 ```yaml
 laminate:
   enabled: true
   ply_thickness: 0.125
   stacking_sequences: ["[0/90]2s", "[±45]2s", "[0/±45/90]s"]
-  longitudinal_tensile_strength: 750.0      # fibre failure is an input
-  tensile_test: {direction: x, max_strain: 0.03, steps: 300, gauge_length: 150.0, width: 25.0}
+  damage_models: [rve_curves, max_stress, hashin, continuum_damage]
+  strengths: {longitudinal_tension: 1140.0, longitudinal_compression: 570.0}
+  fracture_energies: {fibre_tension: 40.0, fibre_compression: 20.0,
+                      matrix_tension: 0.3, matrix_compression: 1.0}
+  coupon_tests:
+    tension: {direction: x, max_strain: 0.03, steps: 300, gauge_length: 150.0, width: 25.0}
+    compression: {direction: x, max_strain: -0.02, steps: 200}
 ```
 
-To try other stacking sequences, edit the list and rerun with `--ply
-OUTPUT/ply/ply_properties.json`: the RVE is not solved again and the laminates take
-about 10 s (the 2D tensile pipeline takes about 5 minutes on 4 cores, mostly the two RVE
-curves). Ready-made pipelines for both engines are in
-[`examples/pipelines/`](examples/pipelines/); the formulation and its checks are in
+To try other stacking sequences, damage models or tests, edit the config and rerun with
+`--ply OUTPUT/ply/ply_properties.json`: the RVE is not solved again. The
+`laminate_damage_*` pipelines in [`examples/pipelines/`](examples/pipelines/) (both
+engines) run an E-glass/epoxy ply with the data of the first World-Wide Failure Exercise
+through all of it; the formulation, the reference data and the checks are in
 [`docs/laminate.md`](docs/laminate.md).
 
 ---

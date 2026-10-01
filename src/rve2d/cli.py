@@ -91,8 +91,9 @@ def _parser() -> argparse.ArgumentParser:
     laminate_parser = subparsers.add_parser(
         "laminate",
         help=(
-            "Laminate pipeline: RVE -> ply properties -> stiffness and tensile test of each "
-            "stacking sequence (laminate section)."
+            "Laminate pipeline: RVE -> ply properties -> stiffness and coupon tests (tension, "
+            "compression, shear; ply damage models) of each stacking sequence (laminate "
+            "section)."
         ),
     )
     laminate_parser.add_argument("config_path", type=Path)
@@ -178,7 +179,7 @@ def _run(args: argparse.Namespace) -> int:
         from rve2d.laminate.pipeline import run_laminate_pipeline
 
         pipeline = run_laminate_pipeline(config, args.output_dir, args.engine, args.ply)
-        _print(_laminate_payload(pipeline.summary_json, pipeline.summary_csv))
+        _print(_laminate_payload(pipeline.summary_json, pipeline.summary_csv, pipeline.coupon_csv))
         return 0
     if args.command == "validate-config":
         _print(config.to_dict())
@@ -222,18 +223,25 @@ def _print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2))
 
 
-LAMINATE_COLUMNS = (
-    "ex", "ey", "gxy", "nuxy", "symmetric", "balanced", "test_peak_stress",
-    "test_strain_at_peak", "elongation_at_peak", "force_at_peak", "first_fibre_failure_strain",
-    "curve_exceeded_strain",
+LAMINATE_COLUMNS = ("ex", "ey", "gxy", "nuxy", "symmetric", "balanced")
+COUPON_COLUMNS = (
+    "peak_stress", "strain_at_peak", "first_ply_failure", "first_ply_failure_strain",
+    "first_ply_failure_stress", "first_fibre_failure_strain", "elongation_at_peak",
+    "force_at_peak", "curve_exceeded_strain", "warnings",
 )  # fmt: skip
 
 
-def _laminate_payload(summary_json: Path, summary_csv: Path) -> dict[str, Any]:
-    """Key numbers of every laminate (all of them are in the summary files)."""
+def _laminate_payload(
+    summary_json: Path, summary_csv: Path, coupon_csv: Path | None
+) -> dict[str, Any]:
+    """Key numbers of every laminate and coupon test (all of them are in the summary files)."""
     summary = json.loads(summary_json.read_text(encoding="utf-8"))
-    with summary_csv.open(encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+
+    def rows(path: Path | None) -> list[dict[str, str]]:
+        if path is None:
+            return []
+        with path.open(encoding="utf-8", newline="") as handle:
+            return list(csv.DictReader(handle))
 
     def value(text: str) -> Any:
         if text in ("True", "False"):
@@ -243,23 +251,30 @@ def _laminate_payload(summary_json: Path, summary_csv: Path) -> dict[str, Any]:
         except ValueError:
             return text
 
+    def pick(row: dict[str, str], columns: tuple[str, ...]) -> dict[str, Any]:
+        return {key: value(row[key]) for key in columns if row.get(key, "") != ""}
+
+    laminates = {row["laminate"]: pick(row, LAMINATE_COLUMNS) for row in rows(summary_csv)}
+    for row in rows(coupon_csv):
+        tests = laminates[row["laminate"]].setdefault("coupon_tests", {})
+        tests.setdefault(row["model"], {})[row["test"]] = pick(row, COUPON_COLUMNS)
     return {
         "engine": summary["engine"],
         "ply_properties": summary["ply_properties"],
         "ply_engineering_constants": summary["ply_engineering_constants"],
+        "ply_strengths": summary["ply_strengths"],
+        "ply_strength_sources": summary["ply_strength_sources"],
         "ply_curves": {
             name: None if curve is None else {k: v for k, v in curve.items() if k != "source"}
             for name, curve in summary["ply_curves"].items()
         },
-        "laminates": {
-            row["laminate"]: {
-                key: value(row[key]) for key in LAMINATE_COLUMNS if row.get(key, "") != ""
-            }
-            for row in rows
-        },
+        "damage_models": summary["damage_models"],
+        "laminates": laminates,
         "summary_csv": str(summary_csv),
+        "coupon_csv": None if coupon_csv is None else str(coupon_csv),
         "summary_json": str(summary_json),
-        "plot": summary["plot"],
+        "plots": summary["plots"],
+        "warnings": summary["warnings"],
         "runtime_seconds": summary["runtime_seconds"],
     }
 

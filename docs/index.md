@@ -5,10 +5,12 @@
 - [Linear homogenization](homogenization.md) — formulation, kinematics
   (including generalized plane strain), boundary conditions, the Voigt convention,
   engineering constants and verification.
-- [Nonlinear RVE solve](nonlinear.md) — J2 plasticity and cohesive
-  fibre/matrix interfaces: configuration, formulation, verification.
-- [Laminates](laminate.md) — ply properties from the RVE, stacking sequences,
-  laminate stiffness (CLT and 3D) and the laminate tensile test (`rve2d laminate`).
+- [Nonlinear RVE solve](nonlinear.md) — J2 and pressure-dependent plasticity, ductile
+  damage and cohesive fibre/matrix interfaces: configuration, formulation, verification.
+- [Laminates](laminate.md) — ply properties and strengths from the RVE, stacking
+  sequences, laminate stiffness (CLT and 3D), ply damage models (maximum stress, Hashin,
+  continuum damage, RVE curves) and coupon tests in tension and compression, with an
+  E-glass/epoxy reference set (`rve2d laminate`).
 - [Examples picker](../examples/README.md) — pick a starting YAML by
   dimension and input mode.
 
@@ -28,8 +30,9 @@
    `build-and-solve` or with `rve2d solve-nonlinear config.yaml mesh.msh
    --output-dir out/`.
 8. Add a `laminate` section and run `rve2d laminate config.yaml` for the ply
-   properties and the stiffness and tensile test of any stacking sequence
-   (ready-made configs for both engines in `examples/pipelines/`).
+   properties and the stiffness and coupon tests (tension, compression, shear; four
+   ply damage models) of any stacking sequence (ready-made configs for both engines in
+   `examples/pipelines/`).
 
 ## Notes
 

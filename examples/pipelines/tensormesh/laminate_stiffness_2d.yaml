@@ -43,5 +43,3 @@ laminate:
   # [0/90/45] is unsymmetric (B != 0); [30/-60]s is unbalanced (shear-extension coupling)
   stacking_sequences: ["[0]8", "[90]8", "[0/90]2s", "[±45]2s", "[0/±45/90]s", "[0/90/45]",
                        "[30/-60]s"]
-  tensile_test:
-    enabled: false

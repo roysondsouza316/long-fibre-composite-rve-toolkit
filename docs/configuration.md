@@ -250,31 +250,34 @@ geometry, and that the mesh is linear (`mesh_order: 1`, no `recombine`).
 ## `laminate` (laminate pipeline)
 
 Used by `rve2d laminate`: ply properties from the RVE (`solver` section, and `nonlinear`
-for the ply curves of the tensile test), then the stiffness and, optionally, a tensile
-test of each stacking sequence. Description, notation and outputs in
-[laminate.md](laminate.md).
+for the ply curves and strengths), then the stiffness and, optionally, coupon tests of each
+stacking sequence with one or more ply damage models. Description, notation, models and
+outputs in [laminate.md](laminate.md).
 
-| Field                                | Type    | Default        | Notes |
-| ------------------------------------ | ------- | -------------- | ----- |
-| `enabled`                            | bool    | `false`        | Master switch (`rve2d laminate` needs it) |
-| `ply_thickness`                      | float   | `0.125`        | Thickness of every ply |
-| `stacking_sequences`                 | list    | `["[0/90]s"]`  | Strings such as `"[0/±45/90]2s"` or lists of angles (degrees, bottom to top) |
-| `transversely_isotropic`             | bool    | `true`         | Average the ply stiffness about the fibre axis |
-| `longitudinal_tensile_strength`      | float?  | `None`         | Fibre-direction strengths (inputs); none: the fibres do not fail |
-| `longitudinal_compressive_strength`  | float?  | `None`         | |
-| `ply_curves`                         | bool    | `true`         | Nonlinear RVE solves for the ply curves; `false`: linear plies (fibre failure only) |
-| `transverse_compression_curve`       | bool    | `false`        | Also solve transverse compression |
-| `transverse_max_strain`              | float   | `0.03`         | Strain range of the transverse curve |
-| `shear_max_strain`                   | float   | `0.06`         | Strain range of the shear curve (engineering) |
-| `curve_steps`                        | int     | `60`           | Load steps of each curve |
-| `tensile_test`                       | object  | see below      | |
+| Field                     | Type    | Default        | Notes |
+| ------------------------- | ------- | -------------- | ----- |
+| `enabled`                 | bool    | `false`        | Master switch (`rve2d laminate` needs it) |
+| `ply_thickness`           | float   | `0.125`        | Thickness of every ply |
+| `stacking_sequences`      | list    | `["[0/90]s"]`  | Strings such as `"[0/±45/90]2s"` or lists of angles (degrees, bottom to top) |
+| `transversely_isotropic`  | bool    | `true`         | Average the ply stiffness about the fibre axis |
+| `damage_models`           | list    | `[rve_curves]` | Any of `rve_curves`, `max_stress`, `hashin`, `continuum_damage` |
+| `strengths`               | object  | none           | `longitudinal_tension`, `longitudinal_compression` (Xt, Xc: inputs, needed by the strength-based models), `transverse_tension`, `transverse_compression`, `in_plane_shear` (Yt, Yc, S12: default to the peaks of the RVE curves), `transverse_shear` (S23, default Yc / 2) |
+| `fracture_energies`       | object  | none           | `fibre_tension`, `fibre_compression`, `matrix_tension`, `matrix_compression` (energy per unit crack area); needed by `continuum_damage` |
+| `characteristic_length`   | float   | `1.0`          | Crack-band width of `continuum_damage` |
+| `ply_curves`              | bool    | `true`         | Nonlinear RVE solves for the ply curves; `false`: no curves (give Yt, Yc, S12) |
+| `transverse_max_strain`   | float   | `0.03`         | Strain range of the transverse curves (tension and compression) |
+| `shear_max_strain`        | float   | `0.06`         | Strain range of the shear curve (engineering) |
+| `curve_steps`             | int     | `60`           | Load steps of each curve |
+| `coupon_tests`            | mapping | none           | Named tests (letters, digits, `_`, `-`); none: stiffness only |
 
-`tensile_test`: `enabled` (default `true`; `false` for stiffness only), `direction`
-(`x`, `y` or `xy`, default `x`), `max_strain` (default `0.02`, negative for compression),
-`steps` (default `200`), `gauge_length` (optional: elongation = strain × gauge length) and
-`width` (optional: force = stress × laminate thickness × width).
+Each entry of `coupon_tests`: `direction` (`x`, `y` or `xy`, default `x`), `max_strain`
+(default `0.02`, negative for compression), `steps` (default `200`), `gauge_length`
+(optional: elongation = strain × gauge length) and `width` (optional: force = stress ×
+laminate thickness × width). Every test runs with every damage model.
 
 Validation requires `solver.enabled: true` with `kinematics: generalized_plane_strain`
-(2D) or `solid` (3D), a readable stacking sequence, positive thickness, strengths, curve
-strains and test settings, and `nonlinear.enabled: true` when the tensile test uses ply
-curves.
+(2D) or `solid` (3D), readable stacking sequences, a positive thickness, known damage
+models, positive strengths and fracture energies, Xt and Xc for the strength-based models
+(and Yt, Yc, S12 when `ply_curves` is false), fracture energies for `continuum_damage`,
+valid test settings, and `nonlinear.enabled: true` when a curve is needed (the curves of
+`rve_curves`, and those whose peak gives a strength the config does not set).

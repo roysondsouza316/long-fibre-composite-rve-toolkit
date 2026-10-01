@@ -1,0 +1,105 @@
+# Laminate damage pipeline from a 3D RVE, Julia engine (Ferrite.jl + DiffCohesive.jl): the
+# E-glass/epoxy of laminate_damage_2d.yaml (WWFE-I E-glass/LY556/HT907/DY063; units mm,
+# MPa, N) on a solid RVE with fibres along z:
+#   RVE (Vf 0.62) -> ply stiffness (linear homogenization, solid)
+#       -> ply curves and strengths (nonlinear RVE solves: transverse tension and
+#          compression xx, in-plane shear xz)
+#       -> stiffness of each laminate, then tension and compression coupon tests with the
+#          four ply damage models
+# Needs gmsh and Julia 1.11+ (`rve2d doctor --setup-julia` once); no PyTorch. For straight
+# fibres the 2D route (laminate_damage_2d.yaml) solves the same problem on a finer mesh at a
+# fraction of the cost; this coarser 3D RVE shows the route that also takes fibres that are
+# not straight.
+#   rve2d laminate examples/pipelines/julia/laminate_damage_3d.yaml
+# Edit stacking_sequences, damage_models or coupon_tests and rerun from the saved ply:
+#   rve2d laminate examples/pipelines/julia/laminate_damage_3d.yaml \
+#       --ply outputs/pipelines/julia/laminate_damage_3d/ply/ply_properties.json
+# Sources and assumptions of every value: docs/laminate.md, "Glass/epoxy reference set".
+mode: synthetic
+dimension: 3
+synthetic:
+  domain_width: 0.0417        # 41.7 x 41.7 x 5 um box, 7 E-glass fibres of 14 um along z
+  domain_height: 0.0417
+  domain_depth: 0.005
+  fibre_radius: 0.007
+  target_volume_fraction: 0.62
+  min_spacing: 0.0012         # minimum gap, about one element
+  random_seed: 5
+  periodic_compatible: true
+  periodic_wrapping: true
+  packing_algorithm: relaxation
+  boundary_clearance: 0.0012
+mesh:
+  element_size_min: 0.0012
+  element_size_max: 0.003
+  verbosity: 0
+export:
+  output_dir: outputs/pipelines/julia/laminate_damage_3d
+  basename: rve
+  formats: ["msh"]
+solver:                       # ply stiffness
+  enabled: true
+  engine: julia
+  kinematics: solid
+  boundary_condition: periodic
+  matrix_youngs_modulus: 3350.0     # LY556/HT907/DY063 epoxy (WWFE-I)
+  matrix_poisson_ratio: 0.35
+  fibre_youngs_modulus: 80000.0     # E-glass, Gevetex (WWFE-I)
+  fibre_poisson_ratio: 0.2
+  write_vtk: false
+nonlinear:                    # ply curves (the same constituents as in 2D)
+  enabled: true
+  engine: julia
+  boundary_condition: periodic
+  matrix:
+    youngs_modulus: 3350.0
+    poisson_ratio: 0.35
+    yield_stress: 50.0
+    compressive_yield_stress: 75.0
+    plastic_poisson_ratio: 0.3
+    hardening_modulus: 3000.0
+    saturation_stress: 80.0
+    damage_onset_strain: 0.3
+    fracture_energy: 0.002
+  fibre:
+    youngs_modulus: 80000.0
+    poisson_ratio: 0.2
+  interface:
+    law: bilinear_mixed_mode
+    penalty_stiffness: 1.0e8
+    normal_strength: 50.0
+    shear_strength: 75.0
+    mode_i_toughness: 0.002
+    mode_ii_toughness: 0.006
+    bk_exponent: 1.45
+    viscosity: 1.0e-4
+laminate:
+  enabled: true
+  ply_thickness: 0.125        # mm
+  stacking_sequences: ["[0]8", "[90]8", "[0/90]2s", "[±45]2s", "[0/±45/90]s", "[90/±30]s"]
+  damage_models: [rve_curves, max_stress, hashin, continuum_damage]
+  strengths:                  # MPa: Xt, Xc are inputs; Yt, Yc, S12 from the RVE curves
+    longitudinal_tension: 1140.0
+    longitudinal_compression: 570.0
+  fracture_energies:          # N/mm, continuum_damage
+    fibre_tension: 40.0
+    fibre_compression: 20.0
+    matrix_tension: 0.3
+    matrix_compression: 1.0
+  characteristic_length: 0.5  # mm
+  transverse_max_strain: 0.03
+  shear_max_strain: 0.08
+  curve_steps: 40
+  coupon_tests:
+    tension:
+      direction: x
+      max_strain: 0.03
+      steps: 300
+      gauge_length: 150.0
+      width: 25.0
+    compression:
+      direction: x
+      max_strain: -0.02
+      steps: 200
+      gauge_length: 150.0
+      width: 25.0

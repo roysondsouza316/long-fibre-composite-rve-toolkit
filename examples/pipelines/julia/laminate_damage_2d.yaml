@@ -1,0 +1,104 @@
+# Laminate damage pipeline from a 2D RVE, Julia engine (Ferrite.jl + DiffCohesive.jl).
+# E-glass/epoxy with the data of the first World-Wide Failure Exercise (WWFE-I,
+# E-glass/LY556/HT907/DY063); units mm, MPa, N.
+#   RVE (Vf 0.62) -> ply stiffness (linear homogenization, generalized plane strain)
+#       -> ply curves and strengths Yt, Yc, S12 (nonlinear RVE solves: transverse tension
+#          and compression xx on the 2D mesh, in-plane shear xz on one periodic layer of
+#          tetrahedra extruded from it)
+#       -> stiffness of each laminate, then tension and compression coupon tests with the
+#          four ply damage models (rve_curves, max_stress, hashin, continuum_damage)
+# Needs gmsh and Julia 1.11+ (`rve2d doctor --setup-julia` once); no PyTorch.
+#   rve2d laminate examples/pipelines/julia/laminate_damage_2d.yaml
+# Edit stacking_sequences, damage_models or coupon_tests and rerun from the saved ply
+# properties (no RVE solve, about a minute):
+#   rve2d laminate examples/pipelines/julia/laminate_damage_2d.yaml \
+#       --ply outputs/pipelines/julia/laminate_damage_2d/ply/ply_properties.json
+# Sources and assumptions of every value: docs/laminate.md, "Glass/epoxy reference set".
+mode: synthetic
+dimension: 2
+synthetic:
+  domain_width: 0.061         # 61 x 61 um window, 15 E-glass fibres of 14 um
+  domain_height: 0.061
+  fibre_radius: 0.007
+  target_volume_fraction: 0.62
+  min_spacing: 0.0007         # 0.7 um minimum gap, about one element
+  random_seed: 3
+  periodic_compatible: true
+  periodic_wrapping: true
+  packing_algorithm: relaxation
+  boundary_clearance: 0.0007
+mesh:
+  element_size_min: 0.0007
+  element_size_max: 0.002
+  verbosity: 0
+export:
+  output_dir: outputs/pipelines/julia/laminate_damage_2d
+  basename: rve
+  formats: ["msh"]
+solver:                       # ply stiffness
+  enabled: true
+  engine: julia
+  kinematics: generalized_plane_strain
+  boundary_condition: periodic
+  matrix_youngs_modulus: 3350.0     # LY556/HT907/DY063 epoxy (WWFE-I)
+  matrix_poisson_ratio: 0.35
+  fibre_youngs_modulus: 80000.0     # E-glass, Gevetex (WWFE-I)
+  fibre_poisson_ratio: 0.2
+  write_vtk: false
+nonlinear:                    # ply curves
+  enabled: true
+  engine: julia
+  boundary_condition: periodic
+  matrix:                     # epoxy: yields at 50 MPa and levels off at its strengths,
+    youngs_modulus: 3350.0    # 80 MPa in tension, 120 in compression (WWFE-I), 57 in shear
+    poisson_ratio: 0.35
+    yield_stress: 50.0
+    compressive_yield_stress: 75.0    # 1.5 x tension, as the strengths 120 / 80
+    plastic_poisson_ratio: 0.3
+    hardening_modulus: 3000.0         # initial slope of the Voce curve
+    saturation_stress: 80.0
+    damage_onset_strain: 0.3          # ductile in the narrow gaps between fibres
+    fracture_energy: 0.002            # N/mm, over one element (crack band)
+  fibre:
+    youngs_modulus: 80000.0
+    poisson_ratio: 0.2
+  interface:                  # fibre/matrix interface (assumed, typical of RVE studies)
+    law: bilinear_mixed_mode
+    penalty_stiffness: 1.0e8          # N/mm^3
+    normal_strength: 50.0             # MPa
+    shear_strength: 75.0              # MPa
+    mode_i_toughness: 0.002           # N/mm (2 J/m^2)
+    mode_ii_toughness: 0.006          # N/mm (6 J/m^2)
+    bk_exponent: 1.45
+    viscosity: 1.0e-4                 # damage regularisation: carries the curves past debonding
+laminate:
+  enabled: true
+  ply_thickness: 0.125        # mm
+  # WWFE-I laminates of this material: [0/±45/90]s and [90/±30]s
+  stacking_sequences: ["[0]8", "[90]8", "[0/90]2s", "[±45]2s", "[0/±45/90]s", "[90/±30]s"]
+  damage_models: [rve_curves, max_stress, hashin, continuum_damage]
+  strengths:                  # MPa. Fibre failure is not modelled in the RVE: Xt and Xc are
+    longitudinal_tension: 1140.0      # the WWFE-I lamina values. Yt, Yc and S12 come from the
+    longitudinal_compression: 570.0   # RVE curves (set them here to override).
+  fracture_energies:          # N/mm, continuum_damage (assumed, typical of glass/epoxy)
+    fibre_tension: 40.0
+    fibre_compression: 20.0
+    matrix_tension: 0.3
+    matrix_compression: 1.0
+  characteristic_length: 0.5  # mm: crack band of the continuum damage model
+  transverse_max_strain: 0.03
+  shear_max_strain: 0.08
+  curve_steps: 60
+  coupon_tests:
+    tension:
+      direction: x
+      max_strain: 0.03
+      steps: 300
+      gauge_length: 150.0     # mm  -> elongation
+      width: 25.0             # mm  -> force (N)
+    compression:
+      direction: x
+      max_strain: -0.02
+      steps: 200
+      gauge_length: 150.0
+      width: 25.0

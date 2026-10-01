@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -294,15 +295,41 @@ class NonlinearSolveConfig:
 
 
 @dataclass(frozen=True)
-class LaminateTensileConfig:
+class CouponTestConfig:
     """Strain-controlled coupon test of each laminate (stress, strain, elongation, force)."""
 
-    enabled: bool = True
     direction: Literal["x", "y", "xy"] = "x"
-    max_strain: float = 0.02
+    max_strain: float = 0.02  # negative: compression
     steps: int = 200
     gauge_length: float | None = None  # elongation = strain * gauge_length
     width: float | None = None  # force = stress * laminate thickness * width
+
+
+@dataclass(frozen=True)
+class PlyStrengthConfig:
+    """Ply strengths (positive magnitudes). The fibre-direction ones are inputs (fibre failure
+    is not part of the RVE model); the transverse and shear ones default to the peaks of the
+    RVE curves."""
+
+    longitudinal_tension: float | None = None  # Xt
+    longitudinal_compression: float | None = None  # Xc
+    transverse_tension: float | None = None  # Yt
+    transverse_compression: float | None = None  # Yc
+    in_plane_shear: float | None = None  # S12
+    transverse_shear: float | None = None  # S23 (Hashin matrix compression; default Yc / 2)
+
+
+@dataclass(frozen=True)
+class FractureEnergyConfig:
+    """Intralaminar fracture energies per unit crack area (continuum damage model)."""
+
+    fibre_tension: float
+    fibre_compression: float
+    matrix_tension: float
+    matrix_compression: float
+
+
+DAMAGE_MODELS = ("rve_curves", "max_stress", "hashin", "continuum_damage")
 
 
 @dataclass(frozen=True)
@@ -310,25 +337,48 @@ class LaminateConfig:
     """Laminates of plies made of the RVE microstructure (``rve2d laminate``).
 
     The ply stiffness comes from the linear homogenization (``solver`` section, kinematics
-    ``generalized_plane_strain`` in 2D or ``solid`` in 3D); for the tensile test the ply's
-    transverse and in-plane shear curves come from nonlinear RVE solves (``nonlinear``
-    section; for a 2D RVE the shear curve is solved on one periodic layer of tetrahedra
-    extruded from its mesh). Fibre failure is not part of the RVE model: the longitudinal
-    strengths are inputs. Use the same units in every section (e.g. mm and MPa).
+    ``generalized_plane_strain`` in 2D or ``solid`` in 3D). For the coupon tests, the ply
+    curves (transverse tension and compression, in-plane shear) come from nonlinear RVE
+    solves (``nonlinear`` section; for a 2D RVE the shear curve is solved on one periodic
+    layer of tetrahedra extruded from its mesh), and each damage model in ``damage_models``
+    runs every test in ``coupon_tests``. Use the same units in every section (e.g. mm, MPa).
     """
 
     enabled: bool = False
     ply_thickness: float = 0.125
     stacking_sequences: list[Any] = field(default_factory=lambda: ["[0/90]s"])
     transversely_isotropic: bool = True
-    longitudinal_tensile_strength: float | None = None
-    longitudinal_compressive_strength: float | None = None
+    damage_models: list[str] = field(default_factory=lambda: ["rve_curves"])
+    strengths: PlyStrengthConfig = field(default_factory=PlyStrengthConfig)
+    fracture_energies: FractureEnergyConfig | None = None
+    characteristic_length: float = 1.0  # crack band of the continuum damage model
     ply_curves: bool = True
-    transverse_compression_curve: bool = False
     transverse_max_strain: float = 0.03
     shear_max_strain: float = 0.06
     curve_steps: int = 60
-    tensile_test: LaminateTensileConfig = field(default_factory=LaminateTensileConfig)
+    coupon_tests: dict[str, CouponTestConfig] = field(default_factory=dict)
+
+    def needed_curves(self) -> tuple[str, ...]:
+        """RVE curves the coupon tests need: all those the ``rve_curves`` model uses (the
+        compression curve only with a compression test), and the curves whose peak gives a
+        strength the other models need and the config does not."""
+        if not self.coupon_tests or not self.ply_curves:
+            return ()
+        models = set(self.damage_models)
+        compression_test = any(test.max_strain < 0 for test in self.coupon_tests.values())
+        given = self.strengths
+        needed = []
+        for name, value in (
+            ("transverse_tension", given.transverse_tension),
+            ("transverse_compression", given.transverse_compression),
+            ("shear", given.in_plane_shear),
+        ):
+            for_curves = "rve_curves" in models and (
+                name != "transverse_compression" or compression_test
+            )
+            if for_curves or (models - {"rve_curves"} and value is None):
+                needed.append(name)
+        return tuple(needed)
 
 
 @dataclass(frozen=True)
@@ -692,12 +742,23 @@ def _laminate_from_dict(payload: Any) -> LaminateConfig:
     if not isinstance(payload, dict):
         raise ConfigError("Config section 'laminate' must be a mapping.")
     data = dict(payload)
-    if data.get("tensile_test") is not None:
-        data["tensile_test"] = _section(
-            LaminateTensileConfig, data["tensile_test"], "laminate.tensile_test"
+    if data.get("strengths") is not None:
+        data["strengths"] = _section(PlyStrengthConfig, data["strengths"], "laminate.strengths")
+    if data.get("fracture_energies") is not None:
+        data["fracture_energies"] = _section(
+            FractureEnergyConfig, data["fracture_energies"], "laminate.fracture_energies"
         )
-    if isinstance(data.get("stacking_sequences"), str):
-        data["stacking_sequences"] = [data["stacking_sequences"]]
+    tests = data.get("coupon_tests")
+    if tests is not None:
+        if not isinstance(tests, dict):
+            raise ConfigError("laminate.coupon_tests must map test names to test settings.")
+        data["coupon_tests"] = {
+            str(name): _section(CouponTestConfig, test or {}, f"laminate.coupon_tests.{name}")
+            for name, test in tests.items()
+        }
+    for key in ("stacking_sequences", "damage_models"):
+        if isinstance(data.get(key), str):
+            data[key] = [data[key]]
     return cast(LaminateConfig, _section(LaminateConfig, data, "laminate"))
 
 
@@ -713,21 +774,28 @@ def _validate_laminate(config: RVEConfig) -> None:
         raise ConfigError("laminate.stacking_sequences needs at least one sequence.")
     for sequence in lam.stacking_sequences:
         parse_stacking_sequence(sequence)
-    for name in ("longitudinal_tensile_strength", "longitudinal_compressive_strength"):
-        value = getattr(lam, name)
+    unknown = [model for model in lam.damage_models if model not in DAMAGE_MODELS]
+    if unknown or not lam.damage_models:
+        raise ConfigError(
+            "laminate.damage_models must list some of: " + ", ".join(DAMAGE_MODELS) + "."
+        )
+    for name, value in asdict(lam.strengths).items():
         if value is not None and value <= 0.0:
-            raise ConfigError(f"laminate.{name} must be positive.")
+            raise ConfigError(f"laminate.strengths.{name} must be positive.")
     if min(lam.transverse_max_strain, lam.shear_max_strain) <= 0.0 or lam.curve_steps < 1:
         raise ConfigError("laminate curve strains must be positive and curve_steps at least 1.")
-    test = lam.tensile_test
-    if test.direction not in ("x", "y", "xy"):
-        raise ConfigError("laminate.tensile_test.direction must be x, y or xy.")
-    if test.max_strain == 0.0 or test.steps < 1:
-        raise ConfigError("laminate.tensile_test needs a non-zero max_strain and steps >= 1.")
-    for name in ("gauge_length", "width"):
-        value = getattr(test, name)
-        if value is not None and value <= 0.0:
-            raise ConfigError(f"laminate.tensile_test.{name} must be positive.")
+    for name, test in lam.coupon_tests.items():
+        label = f"laminate.coupon_tests.{name}"
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise ConfigError(f"{label}: test names may contain letters, digits, _ and - only.")
+        if test.direction not in ("x", "y", "xy"):
+            raise ConfigError(f"{label}.direction must be x, y or xy.")
+        if test.max_strain == 0.0 or test.steps < 1:
+            raise ConfigError(f"{label} needs a non-zero max_strain and steps >= 1.")
+        for key in ("gauge_length", "width"):
+            value = getattr(test, key)
+            if value is not None and value <= 0.0:
+                raise ConfigError(f"{label}.{key} must be positive.")
     if not config.solver.enabled:
         raise ConfigError(
             "The laminate pipeline needs the solver section (enabled: true) for the ply stiffness."
@@ -737,10 +805,43 @@ def _validate_laminate(config: RVEConfig) -> None:
             "The laminate pipeline needs the full 6x6 ply stiffness: use solver.kinematics "
             "generalized_plane_strain (2D) or solid (3D)."
         )
-    if test.enabled and lam.ply_curves and not config.nonlinear.enabled:
+    if not lam.coupon_tests:
+        return
+    strength_models = [model for model in lam.damage_models if model != "rve_curves"]
+    given = lam.strengths
+    if strength_models:
+        missing = [
+            key
+            for key in ("longitudinal_tension", "longitudinal_compression")
+            if getattr(given, key) is None
+        ]
+        if not lam.ply_curves:
+            missing += [
+                key
+                for key in ("transverse_tension", "transverse_compression", "in_plane_shear")
+                if getattr(given, key) is None
+            ]
+        if missing:
+            raise ConfigError(
+                f"The {', '.join(strength_models)} model(s) need laminate.strengths: "
+                + ", ".join(missing)
+                + " (the fibre-direction strengths are inputs; the others come from the RVE "
+                "curves when ply_curves is true)."
+            )
+    if "continuum_damage" in lam.damage_models:
+        if lam.fracture_energies is None:
+            raise ConfigError("The continuum_damage model needs laminate.fracture_energies.")
+        for name, value in asdict(lam.fracture_energies).items():
+            if value <= 0.0:
+                raise ConfigError(f"laminate.fracture_energies.{name} must be positive.")
+        if lam.characteristic_length <= 0.0:
+            raise ConfigError("laminate.characteristic_length must be positive.")
+    if lam.needed_curves() and not config.nonlinear.enabled:
         raise ConfigError(
-            "The laminate tensile test takes the ply curves from the nonlinear section: enable "
-            "it, or set laminate.ply_curves: false for elastic plies (fibre failure only)."
+            "The laminate coupon tests take the ply curves ("
+            + ", ".join(lam.needed_curves())
+            + ") from the nonlinear section: enable it, give the strengths, or set "
+            "laminate.ply_curves: false for linear plies."
         )
 
 

@@ -11,7 +11,9 @@ engineering shear strains.
   about the fibre axis, which makes it exactly transversely isotropic and removes the
   arbitrary choice of which cross-section axis is called 2.
 * The stress-strain curves come from nonlinear RVE solves under uniaxial stress: transverse
-  (ply 22 = RVE xx) and in-plane shear (ply 12 = RVE xz).
+  tension and compression (ply 22 = RVE xx) and in-plane shear (ply 12 = RVE xz).
+* Strengths: the fibre-direction ones (Xt, Xc) are inputs; the matrix-dominated ones (Yt, Yc,
+  S12) are the peaks of the curves unless given.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from numpy.typing import NDArray
 
 from rve2d.engines.common.materials import rotation_matrix, voigt_rotation
 from rve2d.exceptions import ConfigError
+from rve2d.laminate.damage import FractureEnergies, PlyStrengths
 
 FloatArray = NDArray[np.float64]
 
@@ -101,9 +104,34 @@ class PlyProperties:
     transverse_tension: PlyCurve | None = None
     transverse_compression: PlyCurve | None = None
     shear: PlyCurve | None = None
-    longitudinal_tensile_strength: float | None = None
-    longitudinal_compressive_strength: float | None = None
+    strengths: PlyStrengths = field(default_factory=PlyStrengths)  # given values (inputs)
+    fracture_energies: FractureEnergies | None = None
     source: dict[str, Any] = field(default_factory=dict)
+
+    def resolved_strengths(self) -> PlyStrengths:
+        """Strengths with Yt, Yc and S12 taken from the curve peaks where not given."""
+        given = self.strengths
+
+        def pick(value: float | None, curve: PlyCurve | None) -> float | None:
+            return value if value is not None or curve is None else curve.peak_stress
+
+        return PlyStrengths(
+            xt=given.xt,
+            xc=given.xc,
+            yt=pick(given.yt, self.transverse_tension),
+            yc=pick(given.yc, self.transverse_compression),
+            s12=pick(given.s12, self.shear),
+            s23=given.s23,
+        )
+
+    def strength_sources(self) -> dict[str, str | None]:
+        """Where each strength comes from: ``input``, ``rve`` (a curve peak) or None."""
+        resolved = self.resolved_strengths().to_dict()
+        return {
+            name: None if resolved[name] is None
+            else "input" if getattr(self.strengths, name) is not None else "rve"
+            for name in resolved
+        }  # fmt: skip
 
     @property
     def compliance(self) -> FloatArray:
@@ -136,8 +164,11 @@ class PlyProperties:
             "transverse_tension": curve(self.transverse_tension),
             "transverse_compression": curve(self.transverse_compression),
             "shear": curve(self.shear),
-            "longitudinal_tensile_strength": self.longitudinal_tensile_strength,
-            "longitudinal_compressive_strength": self.longitudinal_compressive_strength,
+            "strengths": self.strengths.to_dict(),
+            "resolved_strengths": self.resolved_strengths().to_dict(),
+            "fracture_energies": None
+            if self.fracture_energies is None
+            else self.fracture_energies.to_dict(),
             "source": self.source,
         }
 
@@ -152,13 +183,17 @@ class PlyProperties:
             value = data.get(key)
             return None if value is None else PlyCurve.from_dict(value)
 
+        strengths = dict(data.get("strengths") or {})
+        strengths.setdefault("xt", data.get("longitudinal_tensile_strength"))  # older files
+        strengths.setdefault("xc", data.get("longitudinal_compressive_strength"))
+        energies = data.get("fracture_energies")
         return PlyProperties(
             stiffness=np.asarray(data["stiffness"], dtype=np.float64),
             transverse_tension=curve("transverse_tension"),
             transverse_compression=curve("transverse_compression"),
             shear=curve("shear"),
-            longitudinal_tensile_strength=data.get("longitudinal_tensile_strength"),
-            longitudinal_compressive_strength=data.get("longitudinal_compressive_strength"),
+            strengths=PlyStrengths(**strengths),
+            fracture_energies=None if energies is None else FractureEnergies(**energies),
             source=dict(data.get("source", {})),
         )
 
