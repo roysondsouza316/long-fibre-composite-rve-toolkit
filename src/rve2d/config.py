@@ -296,9 +296,9 @@ class LaminateConfig:
     The ply stiffness comes from the linear homogenization (``solver`` section, kinematics
     ``generalized_plane_strain`` in 2D or ``solid`` in 3D); for the tensile test the ply's
     transverse and in-plane shear curves come from nonlinear RVE solves (``nonlinear``
-    section; a 2D RVE is extruded into a thin 3D slab for the shear curve). Fibre failure is
-    not part of the RVE model: the longitudinal strengths are inputs. Use the same units in
-    every section (e.g. mm and MPa).
+    section; for a 2D RVE the shear curve is solved on one periodic layer of tetrahedra
+    extruded from its mesh). Fibre failure is not part of the RVE model: the longitudinal
+    strengths are inputs. Use the same units in every section (e.g. mm and MPa).
     """
 
     enabled: bool = False
@@ -312,7 +312,6 @@ class LaminateConfig:
     transverse_max_strain: float = 0.03
     shear_max_strain: float = 0.06
     curve_steps: int = 60
-    shear_slab_depth: float | None = None
     tensile_test: LaminateTensileConfig = field(default_factory=LaminateTensileConfig)
 
 
@@ -704,8 +703,6 @@ def _validate_laminate(config: RVEConfig) -> None:
             raise ConfigError(f"laminate.{name} must be positive.")
     if min(lam.transverse_max_strain, lam.shear_max_strain) <= 0.0 or lam.curve_steps < 1:
         raise ConfigError("laminate curve strains must be positive and curve_steps at least 1.")
-    if lam.shear_slab_depth is not None and lam.shear_slab_depth <= 0.0:
-        raise ConfigError("laminate.shear_slab_depth must be positive.")
     test = lam.tensile_test
     if test.direction not in ("x", "y", "xy"):
         raise ConfigError("laminate.tensile_test.direction must be x, y or xy.")

@@ -1,4 +1,4 @@
-"""Mesh reading, CLI error reporting and the Julia engine's environment handling.
+"""Mesh reading and extrusion, CLI error reporting and the Julia engine's environment handling.
 
 None of these need Julia, gmsh or PyTorch.
 """
@@ -8,14 +8,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 from _meshes import square_msh
 from pytest import CaptureFixture, MonkeyPatch
 
 from rve2d.cli import main
+from rve2d.config import load_config
 from rve2d.engines.julia import runner
 from rve2d.exceptions import MeshingError
-from rve2d.mesh_io import read_mesh
+from rve2d.mesh_io import extrude_mesh, read_mesh
+
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
+EXAMPLE_CONFIGS = sorted(EXAMPLES.rglob("*.yaml"))
 
 CONFIG = """\
 mode: synthetic
@@ -23,6 +28,13 @@ synthetic: {domain_width: 1.0, domain_height: 1.0, fibre_radius: 0.1,
             target_volume_fraction: 0.1, periodic_compatible: true}
 solver: {enabled: true, kinematics: plane_strain, boundary_condition: periodic}
 """
+
+
+@pytest.mark.parametrize(
+    "path", EXAMPLE_CONFIGS, ids=[str(path.relative_to(EXAMPLES)) for path in EXAMPLE_CONFIGS]
+)
+def test_example_configs_are_valid(path: Path) -> None:
+    load_config(path)
 
 
 def test_read_mesh_is_quiet_and_reports_bad_files(
@@ -36,6 +48,33 @@ def test_read_mesh_is_quiet_and_reports_bad_files(
     (tmp_path / "bad.msh").write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n3\n1 0 0")
     with pytest.raises(MeshingError, match="bad.msh"):  # meshio.read would exit the process
         read_mesh(tmp_path / "bad.msh")
+
+
+@pytest.mark.parametrize("layers", [1, 3])
+def test_extruded_mesh_is_conforming_and_keeps_the_tags(tmp_path: Path, layers: int) -> None:
+    flat = read_mesh(square_msh(tmp_path / "flat.msh", n=6))
+    extruded = read_mesh(extrude_mesh(tmp_path / "flat.msh", tmp_path / "x.msh", 0.3, layers))
+    tets = extruded.cells_dict["tetra"]
+    a, b, c, d = (extruded.points[tets[:, i]] for i in range(4))
+    volume = np.einsum("ij,ij->i", np.cross(b - a, c - a), d - a) / 6.0
+    assert np.all(np.abs(volume) > 0.0) and np.abs(volume).sum() == pytest.approx(0.3)
+    assert len(tets) == 3 * layers * len(flat.cells_dict["triangle"])
+    # conforming: every triangular face is shared by two tetrahedra or lies on the boundary
+    faces: dict[tuple[int, ...], int] = {}
+    for tet in tets:
+        for face in ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)):
+            key = tuple(sorted(int(tet[i]) for i in face))
+            faces[key] = faces.get(key, 0) + 1
+    boundary = [key for key, count in faces.items() if count == 1]
+    assert max(faces.values()) == 2
+    on_box = np.isclose(extruded.points, 0.0) | np.isclose(extruded.points, [1.0, 1.0, 0.3])
+    assert all(np.any(np.all(on_box[list(key)], axis=0)) for key in boundary)
+    flat_tags = flat.cell_data_dict["gmsh:physical"]["triangle"]
+    tags = extruded.cell_data_dict["gmsh:physical"]["tetra"]
+    assert np.bincount(tags).tolist() == (3 * layers * np.bincount(flat_tags)).tolist()
+    default = read_mesh(extrude_mesh(tmp_path / "flat.msh", tmp_path / "d.msh"))
+    edge = 1.0 / 6.0 * (2.0 + np.sqrt(2.0)) / 3.0  # mean edge of the right triangles
+    assert default.points[:, 2].max() == pytest.approx(edge)
 
 
 def test_cli_reports_errors_in_one_line(tmp_path: Path, capsys: CaptureFixture[str]) -> None:

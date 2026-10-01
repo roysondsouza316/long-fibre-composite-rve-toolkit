@@ -48,6 +48,7 @@ class PlyCurve:
     strain: FloatArray
     stress: FloatArray
     source: str = ""
+    completed: bool = True  # False: the RVE solve stopped before the requested strain
 
     def __post_init__(self) -> None:
         strain = np.asarray(self.strain, dtype=np.float64)
@@ -79,6 +80,7 @@ class PlyCurve:
             "strain": self.strain.tolist(),
             "stress": self.stress.tolist(),
             "source": self.source,
+            "completed": self.completed,
         }
 
     @staticmethod
@@ -87,6 +89,7 @@ class PlyCurve:
             np.asarray(data["strain"], dtype=np.float64),
             np.asarray(data["stress"], dtype=np.float64),
             str(data.get("source", "")),
+            bool(data.get("completed", True)),
         )
 
 

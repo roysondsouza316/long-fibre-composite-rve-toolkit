@@ -1,4 +1,4 @@
-"""Linear homogenization in the Python engine (NumPy/SciPy, no PyTorch needed).
+"""Linear homogenization in the TensorMesh engine (NumPy/SciPy, no PyTorch needed).
 
 First-order, small-strain homogenization on linear triangles/tetrahedra: the nodal
 fluctuations ``w`` solve ``K w = -F E`` with ``K = sum V B^T D B`` and ``F = sum V B^T D``,

@@ -41,27 +41,6 @@ def cube(n: int) -> tuple[np.ndarray, np.ndarray]:
     return points, np.array(cells)
 
 
-def extrude(points: np.ndarray, triangles: np.ndarray, layers: int, depth: float):
-    """Stack ``layers`` prism layers on a 2D triangle mesh and split each prism into three
-    tetrahedra by global vertex order (conforming across prisms). Returns the 3D points, the
-    tetrahedra and, for every tetrahedron, the index of its parent triangle."""
-    n2 = points.shape[0]
-    zs = np.linspace(0.0, depth, layers + 1)
-    points3 = np.vstack([np.column_stack([points, np.full(n2, z)]) for z in zs])
-    tets, parent = [], []
-    for layer in range(layers):
-        for index, tri in enumerate(triangles):
-            a, b, c = sorted(int(v) for v in tri)
-            low = [a + layer * n2, b + layer * n2, c + layer * n2]
-            up = [v + n2 for v in low]
-            for tet in ([low[0], low[1], low[2], up[0]],
-                        [low[1], low[2], up[0], up[1]],
-                        [low[2], up[0], up[1], up[2]]):  # fmt: skip
-                tets.append(tet)
-                parent.append(index)
-    return points3, np.array(tets), np.array(parent)
-
-
 def fibre_phase(points: np.ndarray, cells: np.ndarray) -> np.ndarray:
     centre = points[cells][:, :, :2].mean(axis=1)
     return np.where(np.all((centre > 0.3) & (centre < 0.7), axis=1), 2, 1)
@@ -92,10 +71,3 @@ def square_msh(path: Path, n: int = 8) -> Path:
 def cube_msh(path: Path, n: int = 4) -> Path:
     points, cells = cube(n)
     return write_msh(path, points, cells, fibre_phase(points, cells))
-
-
-def extruded_msh(path: Path, n: int = 8, layers: int = 2, depth: float = 0.5) -> Path:
-    points, triangles = square(n)
-    phase2 = fibre_phase(points, triangles)
-    points3, tets, parent = extrude(points, triangles, layers, depth)
-    return write_msh(path, points3, tets, phase2[parent])

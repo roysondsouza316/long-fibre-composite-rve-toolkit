@@ -14,22 +14,25 @@ The `nonlinear` config section runs a small-strain, rate-independent RVE analysi
 - 2D **plane strain** or **generalized plane strain** (uniform out-of-plane strain with zero
   out-of-plane macro stress, the natural setting for a UD cross-section) and 3D solids.
 
+The laminate pipeline ([laminate.md](laminate.md)) runs this solve for the transverse and
+shear curves of a ply.
+
 Two interchangeable engines implement the same formulation:
 
-- `engine: python` (default, `src/rve2d/engines/tensormesh/nonlinear/`): PyTorch, vectorised
-  over elements, with the traction-separation laws of diffcohesive; the sparse tangent is
-  solved with PARDISO (if `pypardiso` is installed), SciPy's SuperLU, or TensorMesh's
-  `SparseMatrix` / torch-sla (which also runs on CUDA with `device: cuda`).
+- `engine: tensormesh` (default, `src/rve2d/engines/tensormesh/nonlinear/`): PyTorch,
+  vectorised over elements, with the traction-separation laws of diffcohesive; the sparse
+  tangent is solved with SciPy's SuperLU on the CPU, or with TensorMesh's `SparseMatrix` /
+  torch-sla, which also runs on CUDA with `device: cuda`. (`python`, its former name, is
+  still accepted.)
 - `engine: julia`: Ferrite.jl ([FerriteRVE](../src/rve2d/engines/julia/FerriteRVE)) with
   [DiffCohesive.jl](../src/rve2d/engines/julia/DiffCohesive), the Julia counterpart of
   diffcohesive in this repository. It needs Julia 1.11+ but not PyTorch, and reproduces
-  the Python engine to round-off (see [Julia engine](#julia-engine)).
+  the TensorMesh engine to round-off (see [Julia engine](#julia-engine)).
 
-`--engine python|julia` on the command line overrides the configured engine.
+`--engine tensormesh|julia` on the command line overrides the configured engine.
 
 ```bash
 pip install -e ".[gmsh,nonlinear]"          # torch + diffcohesive (+ tensormesh-fem, torch-sla)
-pip install pypardiso                        # optional: ~6x faster sparse solves on CPU
 rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml
 rve2d solve-nonlinear CONFIG.yaml MESH.msh --output-dir out/   # on an existing mesh
 ```
@@ -42,7 +45,7 @@ For a GPU install, get the CUDA build of PyTorch from pytorch.org first and add
 ```yaml
 nonlinear:
   enabled: true
-  engine: python                         # or julia (Ferrite.jl + DiffCohesive.jl)
+  engine: tensormesh                     # or julia (Ferrite.jl + DiffCohesive.jl)
   kinematics: generalized_plane_strain   # 2D: plane_strain | generalized_plane_strain; 3D: solid
   boundary_condition: periodic           # or dirichlet (zero boundary fluctuation)
   matrix: {youngs_modulus: 3500.0, poisson_ratio: 0.35, yield_stress: 60.0, hardening_modulus: 300.0}
@@ -63,8 +66,8 @@ nonlinear:
     max_strain: 0.02
     steps: 40
     unload: false              # true: load to max_strain, then back to zero
-  device: cpu                  # or cuda (Python engine)
-  linear_solver: auto          # auto | pardiso | scipy | tensormesh (Python engine)
+  device: cpu                  # or cuda (TensorMesh engine)
+  linear_solver: auto          # auto (SciPy on CPU, TensorMesh on CUDA) | scipy | tensormesh
   output_every: 0              # write VTU fields every N steps (0 = final state only)
 ```
 
@@ -87,7 +90,8 @@ Hill-Mandel-consistent conjugate of `E` for periodic fluctuations. Cohesive sepa
 `u_fibre - u_matrix` in the reference facet frame (normal into the fibre, so positive normal
 separation means opening); they involve only `w` because the duplicated interface nodes
 share coordinates. Periodicity ties every image-face node to its mirror partner (matched
-per side of the interface) and one interior node carries the rigid-body anchor.
+per side of the interface) and one matrix node (an interior one when the mesh has any)
+carries the rigid-body anchor.
 
 Newton-Raphson uses the consistent tangent of both nonlinearities: the J2 algorithmic
 tangent (Simo & Hughes 1998) and the traction-separation tangent obtained by forward-mode
@@ -144,7 +148,7 @@ of a finite penalty stiffness.
 matrix, transverse uniaxial tension to 2 %, 6,507 unknowns): initial modulus 7.88 GPa,
 peak 45.0 MPa at 0.70 % strain, then softening to 38.6 MPa with 23 % of the interface fully
 debonded and 13 % of the RVE yielded; 56 increments (three cuts), 331 Newton iterations,
-25 s on 4 CPU cores with PARDISO.
+40 s on 4 CPU cores with the TensorMesh engine.
 
 Debonding robustness on the same RVE (40 initial increments):
 
@@ -160,7 +164,7 @@ values delay and raise the peak.
 
 `examples/3d/synthetic/nonlinear_cohesive_plastic.yaml` (3D solid, 776 cohesive triangles,
 4,961 unknowns, uniaxial stress to 1.2 %): initial modulus 6.86 GPa, peak 44.0 MPa at
-0.98 % strain; 27 increments, 137 Newton iterations, 28 s.
+0.98 % strain; 27 increments, 137 Newton iterations, 59 s.
 
 ## Julia engine
 
@@ -185,7 +189,7 @@ rve2d build-and-solve config.yaml --engine julia
 The Python side writes the mesh arrays and `julia_nonlinear_input.toml` to the output
 directory and runs `julia --project=<FerriteRVE> run.jl julia_nonlinear_input.toml` in the
 bundled environment (set up on first use; copied to `~/.cache/rve2d` first if the install
-directory is read-only). Outputs and the summary JSON are the same as for the Python
+directory is read-only). Outputs and the summary JSON are the same as for the TensorMesh
 engine, plus the Julia log `nonlinear_log.txt`. `RVE2D_JULIA` selects the Julia executable
 and `RVE2D_JULIA_TIMEOUT` (seconds, default one day) bounds a run. The package precompiles
 its workload when the environment is set up; starting Julia and loading the engine still
@@ -208,18 +212,21 @@ Wall time of `rve2d solve-nonlinear` on the example meshes (median of two runs, 
 Xeon at 2.1 GHz, CPU only). Every variant takes the same increments and Newton iterations
 and gives the same results; only the speed differs.
 
-| Example | Python + PARDISO | Julia | Python + SciPy | Python + TensorMesh |
-|---|---|---|---|---|
-| 2D (6,507 unknowns, 331 Newton iterations) | 28 s | 38 s | 40 s | 49 s |
-| 3D (4,961 unknowns, 137 Newton iterations) | 31 s | 41 s | 59 s | 97 s |
+| Example | Julia | TensorMesh (default: SciPy SuperLU) | TensorMesh, `linear_solver: tensormesh` |
+|---|---|---|---|
+| 2D (6,507 unknowns, 331 Newton iterations) | 38 s | 40 s | 49 s |
+| 3D (4,961 unknowns, 137 Newton iterations) | 41 s | 59 s | 97 s |
 
-- The Python engine evaluates all elements at once in PyTorch and factorizes with MKL
-  PARDISO (`pip install pypardiso`), both on all 4 cores; it is the fastest CPU option.
+- The TensorMesh engine evaluates all elements at once in PyTorch (on all cores) and
+  factorizes with SciPy's SuperLU, which is single-threaded and has more fill-in on 3D
+  meshes.
 - The Julia engine runs its own code on one thread (UMFPACK uses 2 BLAS threads) and
   spends about 4 s starting up; 34 s of its 38 s in 2D are the solve itself.
 - `linear_solver: tensormesh` hands the factorization to SciPy on the CPU and adds
   conversions, so it is the slowest CPU choice; it exists for `device: cuda`, where the
   whole Newton loop stays on the GPU (not measured here).
+- Intel MKL PARDISO (through `pypardiso`) took 30–50 % less time than SciPy here, but MKL
+  only exists for x86-64 Linux and Windows (not macOS or ARM), so it is not offered.
 
 ## Limitations
 

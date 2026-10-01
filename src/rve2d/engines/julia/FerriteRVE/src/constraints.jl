@@ -2,8 +2,8 @@
 # for a DOF fixed at zero (same rules as the Python rve2d.engines.tensormesh.constraints module).
 #
 # periodic:  image-face nodes are tied to their mirror-face partners, matched per interface
-#            side, with edge and corner chains resolved to one master; one interior matrix node
-#            is fixed to remove the rigid translation.
+#            side, with edge and corner chains resolved to one master; one matrix node
+#            (interior when there is one) is fixed to remove the rigid translation.
 # dirichlet: zero fluctuation on the whole boundary (affine boundary displacement, KUBC).
 
 boundary_tolerance(mesh::RVEMesh) = 1.0e-8 * maximum(mesh.upper - mesh.lower)
@@ -49,16 +49,21 @@ function periodic_masters(mesh::RVEMesh{dim}) where {dim}
     return master
 end
 
-"Matrix-side node closest to the RVE centre that lies off the boundary and off the interface."
-function interior_anchor(mesh::RVEMesh{dim}) where {dim}
-    candidate = trues(n_nodes(mesh))
-    candidate[boundary_nodes(mesh)] .= false
-    candidate .&= mesh.node_side .== 0
+"""
+Matrix-side node off the interface, closest to the RVE centre, whose fluctuation is fixed to
+remove the rigid translation: an interior node when there is one, otherwise an independent
+boundary node (a mesh one element thick has no interior nodes).
+"""
+function anchor_node(mesh::RVEMesh{dim}, master::Vector{Int}) where {dim}
+    candidate = mesh.node_side .== 0
     if n_cohesive(mesh) > 0
         candidate[unique(vec(mesh.cohesive[1:dim, :]))] .= false
     end
-    pool = findall(candidate)
-    isempty(pool) && error("could not find an interior node to anchor the periodic fluctuation")
+    interior = copy(candidate)
+    interior[boundary_nodes(mesh)] .= false
+    pool = findall(interior)
+    isempty(pool) && (pool = findall(candidate .& (master .== 1:n_nodes(mesh))))
+    isempty(pool) && error("could not find a node to anchor the periodic fluctuation")
     centre = (mesh.lower + mesh.upper) / 2
     return pool[argmin([norm(mesh.points[node] - centre) for node in pool])]
 end
@@ -67,7 +72,7 @@ end
     DofMap
 
 `full_to_reduced[d]` is the reduced unknown of Ferrite DOF `d`, or 0 when the DOF is fixed.
-Reduced unknowns are numbered node by node like the Python engine, so both engines assemble
+Reduced unknowns are numbered node by node like the TensorMesh engine, so both engines assemble
 the same reduced system.
 """
 struct DofMap
@@ -86,7 +91,7 @@ function build_dof_map(mesh::RVEMesh, node_dofs::Matrix{Int}, n_full::Int,
         boundary_condition::AbstractString)
     if boundary_condition == "periodic"
         master = periodic_masters(mesh)
-        anchor = interior_anchor(mesh)
+        anchor = anchor_node(mesh, master)
         independent = filter!(!=(anchor), sort!(unique(master)))
         reduced_node = zeros(Int, n_nodes(mesh))
         reduced_node[independent] .= 1:length(independent)

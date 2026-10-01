@@ -17,7 +17,8 @@ Ply behaviour in ply axes (1 = fibre, 2 = transverse, 12 = in-plane shear):
   is linear elastic unless a compression curve is given;
 * in-plane shear: the RVE shear curve;
 * after a curve's maximum strain has been reached, unloading follows the secant to the
-  origin (damage-like memory), and beyond the last sample the stress stays at its last value.
+  origin (damage-like memory), and beyond the last sample the stress stays at its last value
+  (reported as a "curve exceeded" event: extend the RVE curve to cover such strains).
 
 The transverse and shear responses are taken as independent of each other (no interaction),
 an approximation that is exact for loads that excite one mode in each ply, e.g. a [90]
@@ -176,6 +177,11 @@ class TensileResult:
             "first_transverse_damage": first.get("transverse peak passed"),
             "first_shear_damage": first.get("shear peak passed"),
             "first_fibre_failure": first.get("fibre failure"),
+            # a ply strained beyond its RVE curve (held at the last stress): extend the curve
+            "first_curve_exceeded": next(
+                (event for event in self.events if event["event"].endswith("curve exceeded")),
+                None,
+            ),
             "completed": self.completed,
             "message": self.message,
             "events": self.events,
@@ -234,6 +240,7 @@ def tensile_test(
     force_scale = float(np.abs(abd[:3, :3]).max() * abs(settings.max_strain))
     moment_scale = float(np.abs(abd[3:, 3:]).max() * abs(settings.max_strain) / laminate.thickness)
     scales = np.array([force_scale] * 3 + [moment_scale] * 3)
+    elastic = abd[np.ix_(free, free)]
 
     def resultants(unknowns: FloatArray) -> tuple[FloatArray, list[Any]]:
         total = np.zeros(6)
@@ -263,6 +270,10 @@ def tensile_test(
                 shifted = unknowns.copy()
                 shifted[index] += step
                 jacobian[:, column] = (resultants(shifted)[0][free] - residual) / step
+            # A plateau of the ply curves can leave a direction without stiffness (e.g. the
+            # bending of a laminate whose plies all sit on a flat curve): a small multiple of
+            # the elastic stiffness keeps the system solvable without slowing convergence.
+            jacobian += 1e-6 * elastic
             try:
                 update = np.linalg.solve(jacobian, -residual)
             except np.linalg.LinAlgError:
@@ -290,7 +301,7 @@ def tensile_test(
     result.records.append(_record(laminate, settings, unknowns, np.zeros(6), states, points))
     increment = settings.max_strain / settings.steps
     applied, cuts, peak = 0.0, 0, 0.0
-    passed: dict[str, set[int]] = {"transverse": set(), "shear": set()}
+    seen: set[tuple[str, int]] = set()  # (event, ply) pairs already reported
     nominal = settings.max_strain / settings.steps
     while abs(applied) < abs(settings.max_strain) * (1 - 1e-12):
         target = applied + increment
@@ -346,11 +357,15 @@ def tensile_test(
                 ("transverse", law.tension, state.kappa_tension),
                 ("shear", law.shear, state.kappa_shear),
             ):
-                if curve is not None and k not in passed[mode] and kappa > curve.strain_at_peak:
-                    passed[mode].add(k)
-                    result.events.append(
-                        _event(f"{mode} peak passed", applied, total[loaded], laminate, k)
-                    )
+                if curve is None:
+                    continue
+                checks = [(f"{mode} curve exceeded", curve.max_strain)]
+                if curve.strain_at_peak < curve.max_strain:  # the curve has a peak
+                    checks.insert(0, (f"{mode} peak passed", curve.strain_at_peak))
+                for event, limit in checks:
+                    if kappa > limit and (event, k) not in seen:
+                        seen.add((event, k))
+                        result.events.append(_event(event, applied, total[loaded], laminate, k))
         result.records.append(_record(laminate, settings, unknowns, total, states, points))
         stress = total[loaded] / laminate.thickness
         peak = max(peak, abs(stress))

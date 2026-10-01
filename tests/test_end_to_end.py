@@ -1,6 +1,6 @@
 """End to end on a real gmsh mesh: build the periodic 2D example and homogenize it.
 
-Needs the gmsh Python module (skipped otherwise). The Python engine always runs; the Julia
+Needs the gmsh Python module (skipped otherwise). The TensorMesh engine always runs; the Julia
 engine runs on the same mesh when its environment has been set up, and must agree.
 """
 

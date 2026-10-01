@@ -7,6 +7,8 @@
   engineering constants and verification.
 - [Nonlinear RVE solve](nonlinear.md) — J2 plasticity and cohesive
   fibre/matrix interfaces: configuration, formulation, verification.
+- [Laminates](laminate.md) — ply properties from the RVE, stacking sequences,
+  laminate stiffness (CLT and 3D) and the laminate tensile test (`rve2d laminate`).
 - [Examples picker](../examples/README.md) — pick a starting YAML by
   dimension and input mode.
 
@@ -17,7 +19,7 @@
 3. `rve2d build your_config.yaml` (geometry + mesh + metadata)
 4. Open the resulting `.msh` or `.xdmf` in your FEM workflow, **or**
 5. `rve2d build-and-solve your_config.yaml` to also run the linear
-   homogenization (`solver` section) on the Python engine, or on the Julia
+   homogenization (`solver` section) on the TensorMesh engine, or on the Julia
    engine (Ferrite.jl) with `engine: julia` / `--engine julia`.
 6. Use `rve2d batch-study config_a.yaml config_b.yaml --output-dir
    outputs/study` to aggregate engineering constants across multiple RVEs.
@@ -25,6 +27,9 @@
    plasticity + interface-debonding solve on the same mesh, either within
    `build-and-solve` or with `rve2d solve-nonlinear config.yaml mesh.msh
    --output-dir out/`.
+8. Add a `laminate` section and run `rve2d laminate config.yaml` for the ply
+   properties and the stiffness and tensile test of any stacking sequence
+   (ready-made configs for both engines in `examples/pipelines/`).
 
 ## Notes
 

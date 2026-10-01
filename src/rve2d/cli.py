@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from dataclasses import asdict
@@ -177,7 +178,7 @@ def _run(args: argparse.Namespace) -> int:
         from rve2d.laminate.pipeline import run_laminate_pipeline
 
         pipeline = run_laminate_pipeline(config, args.output_dir, args.engine, args.ply)
-        _print(json.loads(pipeline.summary_json.read_text(encoding="utf-8")))
+        _print(_laminate_payload(pipeline.summary_json, pipeline.summary_csv))
         return 0
     if args.command == "validate-config":
         _print(config.to_dict())
@@ -219,6 +220,48 @@ def _run(args: argparse.Namespace) -> int:
 
 def _print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2))
+
+
+LAMINATE_COLUMNS = (
+    "ex", "ey", "gxy", "nuxy", "symmetric", "balanced", "test_peak_stress",
+    "test_strain_at_peak", "elongation_at_peak", "force_at_peak", "first_fibre_failure_strain",
+    "curve_exceeded_strain",
+)  # fmt: skip
+
+
+def _laminate_payload(summary_json: Path, summary_csv: Path) -> dict[str, Any]:
+    """Key numbers of every laminate (all of them are in the summary files)."""
+    summary = json.loads(summary_json.read_text(encoding="utf-8"))
+    with summary_csv.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    def value(text: str) -> Any:
+        if text in ("True", "False"):
+            return text == "True"
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+    return {
+        "engine": summary["engine"],
+        "ply_properties": summary["ply_properties"],
+        "ply_engineering_constants": summary["ply_engineering_constants"],
+        "ply_curves": {
+            name: None if curve is None else {k: v for k, v in curve.items() if k != "source"}
+            for name, curve in summary["ply_curves"].items()
+        },
+        "laminates": {
+            row["laminate"]: {
+                key: value(row[key]) for key in LAMINATE_COLUMNS if row.get(key, "") != ""
+            }
+            for row in rows
+        },
+        "summary_csv": str(summary_csv),
+        "summary_json": str(summary_json),
+        "plot": summary["plot"],
+        "runtime_seconds": summary["runtime_seconds"],
+    }
 
 
 def _homogenization_payload(result: HomogenizationResult) -> dict[str, Any]:

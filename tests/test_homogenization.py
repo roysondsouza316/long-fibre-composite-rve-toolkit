@@ -1,6 +1,6 @@
 """Linear homogenization in both engines: physics checks and engine parity.
 
-The Python engine needs nothing beyond the base install. Julia-engine tests run when
+The TensorMesh engine needs nothing beyond the base install. Julia-engine tests run when
 ``julia`` is available and the bundled environment has been set up
 (``rve2d doctor --setup-julia``); they check that both engines give the same results.
 """
@@ -14,11 +14,12 @@ from pathlib import Path
 import meshio
 import numpy as np
 import pytest
-from _meshes import cube_msh, extruded_msh, square_msh
+from _meshes import cube_msh, square_msh
 
 from rve2d.config import ConfigError, RVEConfig, config_from_dict
 from rve2d.engines.common.materials import PhaseElasticity, constitutive_matrix
 from rve2d.engines.julia import runner
+from rve2d.mesh_io import extrude_mesh
 from rve2d.workflow import solve_homogenization
 
 MATRIX = {"youngs_modulus": 3.5e9, "poisson_ratio": 0.35}
@@ -79,13 +80,20 @@ def test_single_material_recovers_the_material_stiffness(
     np.testing.assert_allclose(effective, expected, rtol=0, atol=1e-9 * np.abs(expected).max())
 
 
-def test_generalized_plane_strain_matches_a_3d_extrusion(tmp_path: Path) -> None:
+@pytest.mark.parametrize("engine", ["tensormesh", "julia"])
+@pytest.mark.parametrize("layers", [1, 2])
+def test_generalized_plane_strain_matches_a_3d_extrusion(
+    tmp_path: Path, layers: int, engine: str
+) -> None:
     # A z-invariant microstructure: the periodic 3D solution on the extruded mesh is
-    # z-invariant, so the 2D generalized-plane-strain stiffness must match it exactly.
-    c2 = stiffness(
-        config(2, "generalized_plane_strain"), square_msh(tmp_path / "a.msh"), tmp_path / "2d"
-    )
-    c3 = stiffness(config(3, "solid"), extruded_msh(tmp_path / "b.msh"), tmp_path / "3d")
+    # z-invariant, so the 2D generalized-plane-strain stiffness must match it exactly. With one
+    # layer (as in the laminate pipeline) every node lies on the top or bottom face.
+    if engine == "julia" and not julia_ready():
+        pytest.skip("Julia engine environment not set up")
+    flat = square_msh(tmp_path / "a.msh")
+    c2 = stiffness(config(2, "generalized_plane_strain"), flat, tmp_path / "2d", engine)
+    extruded = extrude_mesh(flat, tmp_path / "b.msh", depth=0.5 / layers, layers=layers)
+    c3 = stiffness(config(3, "solid"), extruded, tmp_path / "3d", engine)
     np.testing.assert_allclose(c2, c3, rtol=0, atol=1e-9 * np.abs(c3).max())
     assert c2[2, 2] > 1.5 * c2[0, 0]  # the axial (fibre-direction) stiffness dominates
 

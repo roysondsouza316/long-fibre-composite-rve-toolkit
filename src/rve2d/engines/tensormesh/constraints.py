@@ -8,8 +8,8 @@ every full DOF to an independent (reduced) DOF, or to ``-1`` for a DOF fixed at 
   mirror face; edge and corner chains are resolved to a single master. Partners are matched
   per side (matrix-side node to matrix-side node, fibre-side duplicate to fibre-side
   duplicate), so fibres that cross the boundary keep their cohesive interface. Rigid-body
-  translation is removed by fixing the fluctuation of one interior matrix node, which is not
-  part of any periodic tie.
+  translation is removed by fixing the fluctuation of one matrix node: an interior node, or
+  an independent boundary node on a mesh one element thick.
 * ``dirichlet``: the fluctuation is fixed at zero on the whole boundary (affine boundary
   displacement, the "KUBC" upper-bound condition).
 """
@@ -73,7 +73,7 @@ def build_dof_map(mesh: RVEMesh, boundary_condition: str, components: int | None
     ncomp = mesh.dim if components is None else components
     if boundary_condition == "periodic":
         master = periodic_masters(mesh)
-        anchor = _interior_anchor(mesh)
+        anchor = _anchor_node(mesh, master)
         independent = np.unique(master)
         independent = independent[independent != anchor]
         reduced_node = np.full(mesh.n_nodes, -1, dtype=np.int64)
@@ -106,17 +106,19 @@ def _match_key(mesh: RVEMesh, node: int, others: list[int], tol: float) -> tuple
     return (*coords.tolist(), int(mesh.node_side[node]))
 
 
-def _interior_anchor(mesh: RVEMesh) -> int:
-    """Matrix-side node closest to the RVE centre that lies off the boundary."""
-    candidates = np.ones(mesh.n_nodes, dtype=bool)
-    candidates[boundary_nodes(mesh)] = False
-    candidates &= mesh.node_side == 0
-    interface = (
-        np.unique(mesh.cohesive[:, : mesh.dim]) if mesh.n_cohesive else np.zeros(0, dtype=np.int64)
-    )
-    candidates[interface] = False
-    pool = np.flatnonzero(candidates)
+def _anchor_node(mesh: RVEMesh, master: IntArray) -> int:
+    """Matrix-side node off the interface, closest to the RVE centre, whose fluctuation is
+    fixed to remove the rigid translation: an interior node when there is one, otherwise an
+    independent boundary node (a mesh one element thick has no interior nodes)."""
+    candidates = mesh.node_side == 0
+    if mesh.n_cohesive:
+        candidates[np.unique(mesh.cohesive[:, : mesh.dim])] = False
+    interior = candidates.copy()
+    interior[boundary_nodes(mesh)] = False
+    pool = np.flatnonzero(interior)
     if pool.size == 0:
-        raise SolverError("Could not find an interior node to anchor the periodic fluctuation.")
+        pool = np.flatnonzero(candidates & (master == np.arange(mesh.n_nodes)))
+    if pool.size == 0:
+        raise SolverError("Could not find a node to anchor the periodic fluctuation.")
     centre = 0.5 * (mesh.lower + mesh.upper)
     return int(pool[np.argmin(np.linalg.norm(mesh.points[pool] - centre, axis=1))])

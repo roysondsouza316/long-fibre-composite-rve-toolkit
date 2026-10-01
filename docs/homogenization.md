@@ -4,8 +4,8 @@ The `solver` config section computes the **effective (homogenized) stiffness**
 $\bar{C}$ of the RVE in Voigt notation and the **engineering constants** derived from it.
 Two engines implement the same formulation and write the same files:
 
-- `engine: python` (default): NumPy/SciPy, vectorised assembly and one sparse LU
-  factorization (`src/rve2d/engines/tensormesh/homogenization.py`);
+- `engine: tensormesh` (default; `python` is accepted too): NumPy/SciPy, vectorised
+  assembly and one sparse LU factorization (`src/rve2d/engines/tensormesh/homogenization.py`);
 - `engine: julia`: Ferrite.jl `DofHandler`/`CellValues` assembly and one sparse Cholesky
   factorization (`FerriteRVE.homogenize` in
   `src/rve2d/engines/julia/FerriteRVE/src/homogenization.jl`).
@@ -126,11 +126,11 @@ gmsh needed); the engine-parity tests run when the Julia engine is set up.
 | Check | Result (both engines) |
 |---|---|
 | Single material: $\bar{C}$ equals the material stiffness, every kinematics and BC | max relative error 5e-15 |
-| Generalized plane strain vs a 3D periodic solve of the extruded mesh | 1.8e-15 |
+| Generalized plane strain vs a 3D periodic solve of the extruded mesh (one or two element layers) | 1.8e-15 |
 | Plane strain vs the in-plane block of generalized plane strain | 1.3e-16 |
 | Reuss ≤ periodic ≤ dirichlet ≤ Voigt; $\bar{C}$ symmetric | holds |
 | Periodic solution: $u(x^+) - u(x^-) = \bar{\varepsilon}\,(x^+ - x^-)$ at every node pair | holds to 1e-9 |
-| Python engine vs Julia engine: $\bar{C}$, tractions, nodal displacements | agree to 1e-10 or better (about 1e-16 on the examples) |
+| TensorMesh engine vs Julia engine: $\bar{C}$, tractions, nodal displacements | agree to 1e-10 or better (about 1e-16 on the examples) |
 
 ## Performance
 
@@ -138,17 +138,17 @@ Wall time of `rve2d solve` including writing `homogenization.vtu` (median of thr
 4-core Xeon at 2.1 GHz) on the high-fibre-fraction examples and refined versions of them;
 in brackets the Julia engine's time without starting Julia (about 4 s).
 
-| Mesh | Unknowns | Python engine | Julia engine |
+| Mesh | Unknowns | TensorMesh engine | Julia engine |
 |---|---|---|---|
 | 2D example (generalized plane strain) | 16,758 | 1.9 s | 5.4 s (0.9 s) |
 | 2D refined | 118,152 | 15.5 s | 10.5 s (6.2 s) |
 | 3D example | 16,599 | 5.1 s | 6.9 s (3.0 s) |
 | 3D refined | 150,258 | 208 s | 43 s (38 s) |
 
-The Python engine factorizes with SciPy's SuperLU (symmetric mode), which is fast for
+The TensorMesh engine factorizes with SciPy's SuperLU (symmetric mode), which is fast for
 small and medium meshes; the Julia engine uses CHOLMOD's supernodal Cholesky
 factorization, which scales much better on large 3D meshes: prefer `engine: julia` for
-large 3D RVEs (5× faster at 150,000 unknowns here, while Python was faster at 17,000).
+large 3D RVEs (5× faster at 150,000 unknowns here, while TensorMesh was faster at 17,000).
 
 ## Numerical notes
 

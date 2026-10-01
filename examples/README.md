@@ -10,9 +10,12 @@ examples/
 │   ├── synthetic/   # randomly placed circular fibres in a rectangle
 │   ├── image/       # binary segmented mask -> 2D polygons
 │   └── sem/         # raw SEM micrograph -> mask or fitted circles/ellipses
-└── 3d/
-    ├── synthetic/   # randomly placed cylindrical fibres in a box
-    └── image/       # 2D mask extruded into a 3D box
+├── 3d/
+│   ├── synthetic/   # randomly placed cylindrical fibres in a box
+│   └── image/       # 2D mask extruded into a 3D box
+└── pipelines/       # RVE -> ply -> laminates (`rve2d laminate`)
+    ├── tensormesh/  # on the TensorMesh engine
+    └── julia/       # the same configs on the Julia engine
 ```
 
 ## Pick your starting point
@@ -36,6 +39,8 @@ examples/
 | Same with periodic homogenization                | `3d/image/extruded_periodic_solve.yaml`             |
 | 2D plasticity + fibre/matrix debonding (nonlinear) | `2d/synthetic/nonlinear_cohesive_plastic.yaml`    |
 | 3D plasticity + fibre/matrix debonding (nonlinear) | `3d/synthetic/nonlinear_cohesive_plastic.yaml`    |
+| Laminate stiffness of several stacking sequences | `pipelines/<engine>/laminate_stiffness_2d.yaml` (or `_3d`) |
+| Laminate tensile test: stress, strain, elongation, force | `pipelines/<engine>/laminate_tensile_2d.yaml` (or `_3d`) |
 
 ## Run from the repository root
 
@@ -45,17 +50,33 @@ rve2d build           examples/2d/synthetic/basic.yaml
 rve2d build-and-solve examples/2d/synthetic/periodic_solve.yaml
 rve2d build-and-solve examples/2d/synthetic/periodic_solve.yaml --engine julia   # Ferrite.jl
 rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml   # needs .[nonlinear]
+rve2d laminate        examples/pipelines/tensormesh/laminate_stiffness_2d.yaml
+rve2d laminate        examples/pipelines/julia/laminate_tensile_2d.yaml
 ```
 
-Every solve runs on the Python engine unless the config sets `engine: julia` (in the
+Every solve runs on the TensorMesh engine unless the config sets `engine: julia` (in the
 `solver` or `nonlinear` section) or `--engine julia` is given; both engines give the same
 results. The Julia engine needs Julia 1.11+ (`rve2d doctor --setup-julia` prepares it).
 
-The nonlinear examples use mm / MPa / N/mm units. On a 4-core CPU with
-`pypardiso` installed, the 2D and 3D examples each solve in about 30 s with the
-Python engine (SciPy's SuperLU fallback is slower) and in about 40 s with the
-Julia engine. See
-[`docs/nonlinear.md`](../docs/nonlinear.md).
+The nonlinear examples use mm / MPa / N/mm units. On a 4-core CPU the 2D example solves in
+about 40 s on either engine and the 3D example in about 60 s with the TensorMesh engine
+and 40 s with the Julia engine. See [`docs/nonlinear.md`](../docs/nonlinear.md).
+
+## Laminate pipelines
+
+`pipelines/tensormesh/` and `pipelines/julia/` hold the same four configs; only `engine`
+and the output folder differ, and both give the same results:
+
+| Config | Pipeline |
+| ------ | -------- |
+| `laminate_stiffness_2d.yaml` | 2D RVE → ply stiffness → ABD matrix, engineering constants and 3D stiffness of 7 stacking sequences |
+| `laminate_stiffness_3d.yaml` | the same from a 3D RVE |
+| `laminate_tensile_2d.yaml` | 2D RVE → ply stiffness and transverse/shear curves (nonlinear RVE) → stiffness and tensile test of 5 stacking sequences: stress–strain curve, elongation, force |
+| `laminate_tensile_3d.yaml` | the same from a 3D RVE |
+
+To try other stacking sequences, edit `stacking_sequences` and rerun with
+`--ply OUTPUT/ply/ply_properties.json`: the RVE is not solved again. See
+[`docs/laminate.md`](../docs/laminate.md).
 
 `image_path` and `output_dir` in each config are relative to the directory
 where you launch `rve2d`, *not* relative to the YAML file. Run from the repo

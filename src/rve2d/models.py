@@ -394,29 +394,3 @@ def _clipped_length(start: float, end: float, lower: float, upper: float) -> flo
     if start >= lower and end <= upper:
         return end - start
     return max(0.0, min(end, upper) - max(start, lower))
-
-
-def extrude_geometry(geometry: GeometryModel, depth: float) -> GeometryModel:
-    """A 3D slab of thickness ``depth`` (along z) of a 2D geometry: circles become cylinders
-    and polygons prisms; periodic in z when the 2D geometry is periodic."""
-    if not isinstance(geometry.domain, Domain2D):
-        raise ValueError("Only 2D geometries can be extruded.")
-    if depth <= 0.0:
-        raise ValueError("The extrusion depth must be positive.")
-    flat = geometry.domain
-    domain = Domain3D(flat.width, flat.height, depth, flat.origin_x, flat.origin_y, 0.0)
-    return GeometryModel(
-        domain=domain,
-        cylindrical_fibres=[
-            CylinderFibre(f.center_x, f.center_y, f.radius, 0.0, depth, f.fibre_id)
-            for f in geometry.circular_fibres
-        ],
-        extruded_polygonal_fibres=[
-            ExtrudedPolygonFibre(f.points, 0.0, depth, f.fibre_id)
-            for f in geometry.polygonal_fibres
-        ],
-        phase_labels=dict(geometry.phase_labels),
-        boundary_labels={"left": 11, "right": 12, "front": 13, "back": 14, "bottom": 15, "top": 16},
-        periodic_pairs=periodic_boundary_pairs(domain) if geometry.periodic_pairs else [],
-        metadata={**geometry.metadata, "dimension": 3, "extruded_from_2d": True, "depth": depth},
-    )

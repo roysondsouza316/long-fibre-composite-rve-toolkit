@@ -60,11 +60,11 @@ def test_unidirectional_laminate_has_the_ply_constants() -> None:
     ply = carbon_ply()
     laminate = Laminate.from_sequence(ply, "[0_4]", 0.125)
     constants = laminate_constants(laminate)
-    assert constants["ex"] == pytest.approx(CARBON["e1"])
-    assert constants["ey"] == pytest.approx(CARBON["e2"])
-    assert constants["gxy"] == pytest.approx(CARBON["g12"])
-    assert constants["nuxy"] == pytest.approx(CARBON["nu12"])
-    assert constants["flexural_ex"] == pytest.approx(CARBON["e1"])
+    assert constants["ex"] == pytest.approx(CARBON["e1"], rel=1e-12)
+    assert constants["ey"] == pytest.approx(CARBON["e2"], rel=1e-12)
+    assert constants["gxy"] == pytest.approx(CARBON["g12"], rel=1e-12)
+    assert constants["nuxy"] == pytest.approx(CARBON["nu12"], rel=1e-12)
+    assert constants["flexural_ex"] == pytest.approx(CARBON["e1"], rel=1e-12)
     tolerance = 1e-12 * np.abs(ply.stiffness).max()
     np.testing.assert_allclose(
         effective_3d_stiffness(laminate), ply.stiffness, rtol=0, atol=tolerance
@@ -76,7 +76,7 @@ def test_off_axis_modulus_follows_the_transformation_formula() -> None:
     c, s = math.cos(math.radians(30.0)), math.sin(math.radians(30.0))
     e1, e2, g12, nu12 = CARBON["e1"], CARBON["e2"], CARBON["g12"], CARBON["nu12"]
     expected = 1.0 / (c**4 / e1 + (1.0 / g12 - 2.0 * nu12 / e1) * s**2 * c**2 + s**4 / e2)
-    assert laminate_constants(laminate)["ex"] == pytest.approx(expected)
+    assert laminate_constants(laminate)["ex"] == pytest.approx(expected, rel=1e-12)
 
 
 def test_cross_ply_abd_matches_hand_calculation() -> None:
@@ -85,11 +85,11 @@ def test_cross_ply_abd_matches_hand_calculation() -> None:
     q = laminate.reduced_stiffness(0.0)
     abd = abd_matrix(laminate)
     a, b, d = abd[:3, :3], abd[:3, 3:], abd[3:, 3:]
-    assert a[0, 0] == pytest.approx(2 * t * (q[0, 0] + q[1, 1]))
-    assert a[0, 1] == pytest.approx(4 * t * q[0, 1])
-    assert a[2, 2] == pytest.approx(4 * t * q[2, 2])
+    assert a[0, 0] == pytest.approx(2 * t * (q[0, 0] + q[1, 1]), rel=1e-12)
+    assert a[0, 1] == pytest.approx(4 * t * q[0, 1], rel=1e-12)
+    assert a[2, 2] == pytest.approx(4 * t * q[2, 2], rel=1e-12)
     assert np.abs(b).max() < 1e-9 * np.abs(a).max()
-    assert d[0, 0] == pytest.approx(2.0 / 3.0 * (7 * q[0, 0] + q[1, 1]) * t**3)
+    assert d[0, 0] == pytest.approx(2.0 / 3.0 * (7 * q[0, 0] + q[1, 1]) * t**3, rel=1e-12)
     constants = laminate_constants(laminate)
     assert constants["symmetric"] and constants["balanced"]
 
@@ -108,10 +108,10 @@ def test_isotropic_plies_give_an_isotropic_laminate() -> None:
     ply = isotropic_ply()
     laminate = Laminate.from_sequence(ply, "[0/±45/90/30]s", 0.2)
     constants = laminate_constants(laminate)
-    assert constants["ex"] == pytest.approx(3500.0)
-    assert constants["ey"] == pytest.approx(3500.0)
-    assert constants["nuxy"] == pytest.approx(0.35)
-    assert constants["gxy"] == pytest.approx(3500.0 / 2.7)
+    assert constants["ex"] == pytest.approx(3500.0, rel=1e-12)
+    assert constants["ey"] == pytest.approx(3500.0, rel=1e-12)
+    assert constants["nuxy"] == pytest.approx(0.35, rel=1e-12)
+    assert constants["gxy"] == pytest.approx(3500.0 / 2.7, rel=1e-12)
     tolerance = 1e-12 * np.abs(ply.stiffness).max()
     np.testing.assert_allclose(
         effective_3d_stiffness(laminate), ply.stiffness, rtol=0, atol=tolerance

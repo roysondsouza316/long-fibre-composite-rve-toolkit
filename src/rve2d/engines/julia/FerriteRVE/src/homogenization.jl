@@ -1,6 +1,6 @@
 # Linear-elastic, first-order homogenization: the effective stiffness of the RVE from unit
 # macro strains, with periodic (or affine) boundary fluctuations. Same formulation as the
-# Python engine (rve2d.engines.tensormesh.homogenization).
+# TensorMesh engine (rve2d.engines.tensormesh.homogenization).
 #
 # Unknowns are the nodal fluctuations `w`; the strain of an element is `B w + E` for the macro
 # strain `E` (Voigt, engineering shear). Equilibrium `K w = -F E` with `K = Σ V Bᵀ D B` and

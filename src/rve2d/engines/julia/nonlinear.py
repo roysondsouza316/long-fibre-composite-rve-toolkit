@@ -1,7 +1,7 @@
 """Nonlinear RVE solve with the Julia engine (``FerriteRVE`` on Ferrite.jl + DiffCohesive.jl).
 
 ``nonlinear.engine: julia`` exports the mesh arrays and a TOML input, runs the engine (see
-``rve2d.engines.julia.runner``) and reads back the same response CSV the Python engine
+``rve2d.engines.julia.runner``) and reads back the same response CSV the TensorMesh engine
 writes; the summary JSON has the same layout. PyTorch is not needed.
 """
 

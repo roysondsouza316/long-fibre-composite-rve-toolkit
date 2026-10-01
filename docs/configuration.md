@@ -12,6 +12,7 @@ mesh: { ... }
 export: { ... }
 solver: { ... }             # optional; linear homogenization when enabled: true
 nonlinear: { ... }          # optional; plasticity + cohesive interfaces when enabled: true
+laminate: { ... }           # optional; laminate pipeline (rve2d laminate) when enabled: true
 ```
 
 Unknown keys in any section are rejected with a `ConfigError` naming the key.
@@ -146,7 +147,7 @@ Runs when `enabled: true`: `build-and-solve` and `batch-study` then include it, 
 | Field                                      | Type    | Default        | Notes                                                  |
 | ------------------------------------------ | ------- | -------------- | ------------------------------------------------------ |
 | `enabled`                                  | bool    | `false`        | Master switch                                          |
-| `engine`                                   | enum    | `python`       | `python` (NumPy/SciPy) or `julia` (Ferrite.jl, needs Julia 1.11+); `--engine` overrides it |
+| `engine`                                   | enum    | `tensormesh`   | `tensormesh` (NumPy/SciPy) or `julia` (Ferrite.jl, needs Julia 1.11+); `--engine` overrides it; `python` is an alias of `tensormesh` |
 | `boundary_condition`                       | enum    | `dirichlet`    | `dirichlet` (zero boundary fluctuation, upper bound) or `periodic` |
 | `kinematics`                               | enum    | `plane_strain` | 2D: `plane_stress`, `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
 | `matrix_material_model` / `fibre_material_model` | enum | `isotropic` | `isotropic` or `orthotropic`                          |
@@ -173,7 +174,7 @@ Which kinematics to use:
 
 ### Validation rules (enforced by `load_config`)
 
-- `engine` must be `python` or `julia`.
+- `engine` must be `tensormesh` (or its alias `python`) or `julia`.
 - Periodic solves require `periodic_compatible: true` in the section of the active
   `mode`.
 - 2D solves use `plane_stress`, `plane_strain` or `generalized_plane_strain`; 3D solves
@@ -189,21 +190,21 @@ Which kinematics to use:
 
 ## `nonlinear` (plasticity + cohesive interfaces)
 
-Runs only when `enabled: true`. The Python engine needs `pip install -e ".[nonlinear]"`;
+Runs only when `enabled: true`. The TensorMesh engine needs `pip install -e ".[nonlinear]"`;
 the Julia engine needs Julia 1.11+ (see [nonlinear.md](nonlinear.md#julia-engine)). Full
 description, units and outputs in [nonlinear.md](nonlinear.md).
 
 | Field                | Type   | Default            | Notes                                                        |
 | -------------------- | ------ | ------------------ | ------------------------------------------------------------ |
 | `enabled`            | bool   | `false`            | Master switch                                                |
-| `engine`             | enum   | `python`           | `python` (PyTorch) or `julia` (Ferrite.jl + DiffCohesive.jl, CPU); `--engine` overrides it |
+| `engine`             | enum   | `tensormesh`       | `tensormesh` (PyTorch) or `julia` (Ferrite.jl + DiffCohesive.jl, CPU); `--engine` overrides it; `python` is an alias of `tensormesh` |
 | `kinematics`         | enum   | GPS (2D) / `solid` (3D) | 2D: `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
 | `boundary_condition` | enum   | `periodic`         | `periodic` (needs `periodic_compatible: true`) or `dirichlet` |
 | `matrix`, `fibre`    | object | required           | `youngs_modulus`, `poisson_ratio`, optional `yield_stress` (omit: elastic), `hardening_modulus` (default 0) |
 | `interface`          | object | none               | Cohesive fibre/matrix interfaces; omit or `enabled: false` for perfect bonding |
 | `load`               | object | see below          | Macro load path                                              |
-| `device`             | enum   | `cpu`              | `cpu` or `cuda` (Python engine)                              |
-| `linear_solver`      | enum   | `auto`             | `auto`, `pardiso`, `scipy`, `tensormesh` (Python engine; the Julia engine uses UMFPACK) |
+| `device`             | enum   | `cpu`              | `cpu` or `cuda` (TensorMesh engine)                          |
+| `linear_solver`      | enum   | `auto`             | `auto` (SciPy on CPU, TensorMesh on CUDA), `scipy`, `tensormesh` (TensorMesh engine; the Julia engine uses UMFPACK) |
 | `newton_max_iterations` / `newton_tolerance` | int / float | `25` / `1e-8` | Relative residual tolerance                     |
 | `max_step_cuts`      | int    | `10`               | Max halvings of an increment before the solve stops          |
 | `output_every`       | int    | `0`                | Write VTU fields every N steps (0: final state only)         |
@@ -232,3 +233,37 @@ description, units and outputs in [nonlinear.md](nonlinear.md).
 Validation also checks that each toughness exceeds the elastic energy at damage
 onset (`G_c > T^2 / 2K`), that periodic solves use a periodic-compatible
 geometry, and that the mesh is linear (`mesh_order: 1`, no `recombine`).
+
+---
+
+## `laminate` (laminate pipeline)
+
+Used by `rve2d laminate`: ply properties from the RVE (`solver` section, and `nonlinear`
+for the ply curves of the tensile test), then the stiffness and, optionally, a tensile
+test of each stacking sequence. Description, notation and outputs in
+[laminate.md](laminate.md).
+
+| Field                                | Type    | Default        | Notes |
+| ------------------------------------ | ------- | -------------- | ----- |
+| `enabled`                            | bool    | `false`        | Master switch (`rve2d laminate` needs it) |
+| `ply_thickness`                      | float   | `0.125`        | Thickness of every ply |
+| `stacking_sequences`                 | list    | `["[0/90]s"]`  | Strings such as `"[0/±45/90]2s"` or lists of angles (degrees, bottom to top) |
+| `transversely_isotropic`             | bool    | `true`         | Average the ply stiffness about the fibre axis |
+| `longitudinal_tensile_strength`      | float?  | `None`         | Fibre-direction strengths (inputs); none: the fibres do not fail |
+| `longitudinal_compressive_strength`  | float?  | `None`         | |
+| `ply_curves`                         | bool    | `true`         | Nonlinear RVE solves for the ply curves; `false`: linear plies (fibre failure only) |
+| `transverse_compression_curve`       | bool    | `false`        | Also solve transverse compression |
+| `transverse_max_strain`              | float   | `0.03`         | Strain range of the transverse curve |
+| `shear_max_strain`                   | float   | `0.06`         | Strain range of the shear curve (engineering) |
+| `curve_steps`                        | int     | `60`           | Load steps of each curve |
+| `tensile_test`                       | object  | see below      | |
+
+`tensile_test`: `enabled` (default `true`; `false` for stiffness only), `direction`
+(`x`, `y` or `xy`, default `x`), `max_strain` (default `0.02`, negative for compression),
+`steps` (default `200`), `gauge_length` (optional: elongation = strain × gauge length) and
+`width` (optional: force = stress × laminate thickness × width).
+
+Validation requires `solver.enabled: true` with `kinematics: generalized_plane_strain`
+(2D) or `solid` (3D), a readable stacking sequence, positive thickness, strengths, curve
+strains and test settings, and `nonlinear.enabled: true` when the tensile test uses ply
+curves.

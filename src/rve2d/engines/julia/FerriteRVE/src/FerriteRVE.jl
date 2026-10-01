@@ -11,7 +11,7 @@ The Julia engine of rve2d, on [Ferrite.jl](https://ferrite-fem.github.io/):
   cohesive fibre/matrix interfaces with DiffCohesive.jl traction-separation laws, under
   periodic (or affine) boundary conditions with mixed macro strain/stress control.
 
-It mirrors the Python engine (`rve2d.engines.tensormesh`): same formulations, interface
+It mirrors the TensorMesh engine (`rve2d.engines.tensormesh`): same formulations, interface
 insertion, constraints, Newton strategy and output files, so the two engines are
 interchangeable (`engine: julia` in an rve2d config) and give the same results to round-off.
 The rve2d bridge writes a TOML input and runs

@@ -6,14 +6,17 @@ representative volume elements (RVEs)** of long-fibre composite plies and solvin
 - **linear homogenization**: the effective stiffness and engineering constants of the RVE
   under periodic or affine boundary conditions;
 - **nonlinear RVE solves**: J2 plasticity in the fibres and matrix and cohesive-zone
-  fibre/matrix interfaces (debonding) under mixed macro strain/stress control.
+  fibre/matrix interfaces (debonding) under mixed macro strain/stress control;
+- **laminates**: ply properties from the RVE, then for any stacking sequence the ABD
+  matrix, engineering constants and 3D effective stiffness, and a laminate tensile test
+  (stress–strain curve, elongation and force).
 
-Both solves run on either of **two interchangeable engines** that give the same results
+The solves run on either of **two interchangeable engines** that give the same results
 to round-off:
 
 | Engine   | Linear homogenization | Nonlinear solve                                                                                   | Needs                          |
 | -------- | --------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `python` (default) | NumPy / SciPy | PyTorch with the laws of [diffcohesive](https://pypi.org/project/diffcohesive/), TensorMesh sparse solvers (CPU and CUDA) | nothing extra / the `nonlinear` extra |
+| `tensormesh` (default) | NumPy / SciPy | PyTorch with the laws of [diffcohesive](https://pypi.org/project/diffcohesive/); SciPy (CPU) or TensorMesh (CPU, CUDA) sparse solvers | nothing extra / the `nonlinear` extra |
 | `julia`  | [Ferrite.jl](https://ferrite-fem.github.io/) | Ferrite.jl with the bundled DiffCohesive.jl laws                                    | Julia 1.11+                    |
 
 > Despite the historical `rve2d` name, this package supports both 2D and 3D RVEs.
@@ -48,6 +51,8 @@ Pipeline stages:
    engineering constants, stress–strain and traction CSVs, `.vtu` fields for ParaView
 6. **Nonlinear RVE solve** (optional, `nonlinear` section): J2 plasticity + cohesive
    interfaces; macro stress–strain curve, damage and plasticity histories, `.vtu` fields
+7. **Laminate pipeline** (optional, `laminate` section, `rve2d laminate`): ply properties
+   from stages 5–6, then stiffness and tensile test of every stacking sequence
 
 ---
 
@@ -58,18 +63,17 @@ python -m pip install -e ".[gmsh,dev]"
 rve2d doctor                      # what is installed, and what each part is for
 ```
 
-Required Python: **3.11+**. This is enough for geometry, meshing and linear
-homogenization with the Python engine. On Linux, gmsh also needs the system
-OpenGL/X libraries (e.g. `apt install libglu1-mesa libxcursor1 libxinerama1 libxft2`).
-Without gmsh, geometry generation and validation still work, but meshing fails with a
-clear error.
+Required Python: **3.11+**. This is enough for geometry, meshing, linear
+homogenization with the TensorMesh engine and the laminate stiffness pipeline. On Linux,
+gmsh also needs the system OpenGL/X libraries (e.g. `apt install libglu1-mesa libxcursor1
+libxinerama1 libxft2`). Without gmsh, geometry generation and validation still work, but
+meshing fails with a clear error.
 
-The **Python engine's nonlinear solve** needs the `nonlinear` extra (PyTorch,
+The **TensorMesh engine's nonlinear solve** needs the `nonlinear` extra (PyTorch,
 diffcohesive, TensorMesh):
 
 ```bash
 python -m pip install -e ".[gmsh,nonlinear]"
-python -m pip install pypardiso   # optional, x86 CPUs: several times faster sparse solves
 ```
 
 The **Julia engine** needs [Julia](https://julialang.org/downloads) 1.11 or newer on
@@ -89,19 +93,21 @@ rve2d doctor --setup-julia
 ```yaml
 solver:              # linear homogenization
   enabled: true
-  engine: python     # or julia
+  engine: tensormesh # or julia
 nonlinear:           # plasticity + cohesive interfaces
   enabled: true
-  engine: python     # or julia
+  engine: tensormesh # or julia
 ```
 
 or override both from the command line with `--engine julia`. The result files are the
-same whichever engine runs; the summary JSON records which one did.
+same whichever engine runs; the summary JSON records which one did. (`python`, the
+TensorMesh engine's former name, is still accepted.)
 
-Which is faster depends on the job (4-core CPU): the Python engine with `pypardiso` is
-about 25 % faster for the nonlinear solve and for small linear problems (Julia spends
-about 4 s starting up), while the Julia engine is about 5× faster for large 3D linear
-homogenization (150,000 unknowns: 43 s against 208 s). Only the Python engine runs on a GPU.
+Which is faster depends on the job (4-core CPU): the TensorMesh engine is faster for small
+linear problems (Julia spends about 4 s starting up) and as fast as Julia for the 2D
+nonlinear example (40 s against 38 s); the Julia engine is faster for the 3D nonlinear
+example (41 s against 59 s) and about 5× faster for large 3D linear homogenization
+(150,000 unknowns: 43 s against 208 s). Only the TensorMesh engine runs on a GPU.
 See the performance sections of [`docs/nonlinear.md`](docs/nonlinear.md#performance) and
 [`docs/homogenization.md`](docs/homogenization.md#performance).
 
@@ -118,9 +124,12 @@ examples/
 │   ├── synthetic/   # random circular fibres in a rectangle
 │   ├── image/       # binary mask → polygonal fibres
 │   └── sem/         # raw SEM micrograph → mask or fitted circles/ellipses
-└── 3d/
-    ├── synthetic/   # random cylindrical fibres in a box
-    └── image/       # 2D mask extruded into a 3D box
+├── 3d/
+│   ├── synthetic/   # random cylindrical fibres in a box
+│   └── image/       # 2D mask extruded into a 3D box
+└── pipelines/       # RVE → ply → laminates (stacking sequences, tensile test)
+    ├── tensormesh/  # the same pipelines on the TensorMesh engine ...
+    └── julia/       # ... and on the Julia engine
 ```
 
 ### Common commands (run from the repo root)
@@ -132,7 +141,7 @@ rve2d validate-config examples/2d/synthetic/basic.yaml
 # 2. Build geometry + mesh + metadata
 rve2d build           examples/2d/synthetic/basic.yaml
 
-# 3. Build + linear homogenization in one step (Python engine; add --engine julia for Ferrite.jl)
+# 3. Build + linear homogenization in one step (TensorMesh engine; --engine julia for Ferrite.jl)
 rve2d build-and-solve examples/2d/synthetic/periodic_solve.yaml
 rve2d build-and-solve examples/3d/synthetic/periodic_solve.yaml --engine julia
 
@@ -158,6 +167,10 @@ rve2d batch-study \
 # 9. Nonlinear RVE: matrix plasticity + fibre/matrix debonding
 rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml
 rve2d build-and-solve examples/3d/synthetic/nonlinear_cohesive_plastic.yaml --engine julia
+
+# 10. Laminates: stiffness of several stacking sequences (seconds), then the tensile test
+rve2d laminate examples/pipelines/tensormesh/laminate_stiffness_2d.yaml
+rve2d laminate examples/pipelines/julia/laminate_tensile_2d.yaml
 ```
 
 The full picker table is in [`examples/README.md`](examples/README.md).
@@ -171,10 +184,11 @@ rve2d [--traceback] COMMAND ...
 
 rve2d validate-config CONFIG_PATH
 rve2d build           CONFIG_PATH [--output-dir PATH] [--basename NAME]
-rve2d solve           CONFIG_PATH MESH_PATH --output-dir PATH [--engine python|julia]
-rve2d solve-nonlinear CONFIG_PATH MESH_PATH --output-dir PATH [--engine python|julia]
-rve2d build-and-solve CONFIG_PATH [--output-dir PATH] [--basename NAME] [--engine python|julia]
+rve2d solve           CONFIG_PATH MESH_PATH --output-dir PATH [--engine tensormesh|julia]
+rve2d solve-nonlinear CONFIG_PATH MESH_PATH --output-dir PATH [--engine tensormesh|julia]
+rve2d build-and-solve CONFIG_PATH [--output-dir PATH] [--basename NAME] [--engine tensormesh|julia]
 rve2d batch-study     CONFIG_PATH [CONFIG_PATH ...] --output-dir PATH [--engine ...] [--fail-fast]
+rve2d laminate        CONFIG_PATH [--output-dir PATH] [--engine tensormesh|julia] [--ply PLY_JSON]
 rve2d doctor          [--setup-julia]
 rve2d solve-ferrite   CONFIG_PATH MESH_PATH --output-dir PATH   # same as solve --engine julia
 ```
@@ -224,6 +238,13 @@ shows the full Python traceback instead.
 (status and error message for failed cases, which do not stop the study unless
 `--fail-fast` is given).
 
+`laminate` writes `rve/` (the RVE build), `ply/` (the RVE solves and
+`ply_properties.json`), `laminates/summary.csv` (one row per stacking sequence),
+`laminates/<sequence>/` (`abd.csv`, `effective_3d_stiffness.csv`, `constants.json` and,
+with the tensile test, `tensile_test.csv` and `tensile_test_summary.json`),
+`laminates/tensile_tests.png` and `pipeline_summary.json`; see
+[`docs/laminate.md`](docs/laminate.md).
+
 ---
 
 ## Configuration cheat-sheet
@@ -241,6 +262,7 @@ Top-level keys:
 | `export`           | object   | Output dir, basename, formats                                |
 | `solver`           | object   | Optional linear homogenization: engine, kinematics, BCs, materials |
 | `nonlinear`        | object   | Optional plasticity + cohesive-interface RVE solve           |
+| `laminate`         | object   | Optional laminate pipeline: ply thickness, stacking sequences, tensile test |
 
 YAML and JSON are both supported. See [`docs/configuration.md`](docs/configuration.md)
 for every field, default, and example value.
@@ -260,6 +282,7 @@ src/rve2d/
 ├── doctor.py               # `rve2d doctor` installation checks
 ├── config.py               # dataclass schema + YAML/JSON loader + validation
 ├── models.py               # Domain / Fibre / GeometryModel dataclasses
+├── mesh_io.py              # quiet mesh reading, 2D mesh extrusion into tetrahedra
 ├── exceptions.py
 ├── synthetic_generation/   # 2D circular, 3D cylindrical fibres; SEM → fitted circles/ellipses
 ├── image_import/           # binary mask → 2D polygons / extruded 3D volumes
@@ -267,18 +290,24 @@ src/rve2d/
 ├── meshing/gmsh_builder.py
 ├── export/writers.py
 ├── validation/checks.py
+├── laminate/               # engine-independent: works on the RVE results
+│   ├── stacking.py         # stacking-sequence notation: [0/±45/90]2s, [0_2/90]T, ...
+│   ├── ply.py              # ply stiffness and stress–strain curves from the RVE results
+│   ├── clt.py              # ABD matrix, engineering constants, 3D effective stiffness
+│   ├── tensile.py          # laminate tensile test: stress, strain, elongation, force
+│   └── pipeline.py         # `rve2d laminate`: RVE -> ply -> laminates
 └── engines/
     ├── __init__.py         # homogenize() / solve_nonlinear(): dispatch to the chosen engine
     ├── common/             # shared by both engines
     │   ├── materials.py        # phase stiffness matrices, rotations
     │   ├── homogenization.py   # problem/result types, engineering constants, result files
     │   └── records.py          # nonlinear load paths, step records, result files
-    ├── python/             # Python engine
+    ├── tensormesh/         # TensorMesh engine
     │   ├── mesh.py             # mesh reading, interface node duplication, cohesive elements
     │   ├── constraints.py      # periodic / affine fluctuation constraints
     │   ├── homogenization.py   # linear homogenization (SciPy sparse LU, one factorization)
     │   └── nonlinear/          # PyTorch: J2 plasticity, diffcohesive cohesive elements,
-    │                           # bordered Newton, PARDISO / SuperLU / TensorMesh solvers
+    │                           # bordered Newton, SciPy SuperLU / TensorMesh solvers
     └── julia/              # Julia engine
         ├── runner.py           # find Julia, set up the bundled environment, run a task
         ├── homogenization.py   # writes the TOML input, reads the TOML result
@@ -337,14 +366,51 @@ the generated mesh:
 - 2D plane strain or generalized plane strain, and 3D solids
 - consistent Newton tangents (the cohesive tangent comes from automatic
   differentiation through the law), adaptive load stepping
-- Python engine: PyTorch with PARDISO / SuperLU / TensorMesh solvers on CPU and
-  TensorMesh on CUDA; Julia engine: Ferrite.jl with
+- TensorMesh engine: PyTorch with SciPy's SuperLU on CPU and TensorMesh's solvers (CPU or
+  CUDA); Julia engine: Ferrite.jl with
   [DiffCohesive.jl](src/rve2d/engines/julia/DiffCohesive), a Julia port of
   diffcohesive's laws with ForwardDiff tangents. Both engines take the same increments
   and Newton iterations and agree to round-off.
 
 See [`docs/nonlinear.md`](docs/nonlinear.md) for the configuration, the
 formulation and the verification results.
+
+---
+
+## Laminates: stacking sequences, stiffness and tensile test
+
+`rve2d laminate CONFIG` turns the RVE into plies and the plies into laminates. It runs on
+either engine (only the RVE solves depend on it) for 2D and 3D RVEs:
+
+1. **Ply stiffness**: the linear homogenization of the RVE (generalized plane strain in 2D,
+   solid in 3D) with the fibres along the ply's axis 1; optionally averaged to transverse
+   isotropy.
+2. **Ply curves** (for the tensile test): nonlinear RVE solves under uniaxial stress give the
+   transverse (RVE `xx`) and in-plane shear (RVE `xz`) stress–strain curves. For a 2D RVE the
+   shear runs on one periodic layer of tetrahedra extruded from its mesh: the exact
+   z-invariant 3D problem at a few times the cost of the 2D solve.
+3. **Laminates**: for every entry of `stacking_sequences` (`[0/90]s`, `[0/±45/90]2s`,
+   `[0_2/90]T`, `[(±45)2/0]`, ...): the ABD matrix, membrane and flexural engineering
+   constants, coupling flags and the 3D effective stiffness of the stack.
+4. **Tensile test** (optional): strain-controlled in x, y or xy with the other resultants and
+   moments zero; plies follow the RVE curves (secant law with damage memory) and fail in the
+   fibre direction at the given strengths. Output: stress–strain curve, damage events,
+   elongation over `gauge_length` and force over `width`.
+
+```yaml
+laminate:
+  enabled: true
+  ply_thickness: 0.125
+  stacking_sequences: ["[0/90]2s", "[±45]2s", "[0/±45/90]s"]
+  longitudinal_tensile_strength: 750.0      # fibre failure is an input
+  tensile_test: {direction: x, max_strain: 0.03, steps: 300, gauge_length: 150.0, width: 25.0}
+```
+
+To try other stacking sequences, edit the list and rerun with `--ply
+OUTPUT/ply/ply_properties.json`: the RVE is not solved again and the laminates take
+seconds. Ready-made pipelines for both engines are in
+[`examples/pipelines/`](examples/pipelines/); the formulation and its checks are in
+[`docs/laminate.md`](docs/laminate.md).
 
 ---
 
@@ -357,10 +423,11 @@ mypy                    # type-check (strict; configured in pyproject.toml)
 ```
 
 The physics tests (single-material recovery, bounds, periodicity of the solution,
-generalized plane strain against a 3D extrusion) run on structured meshes and need no
-gmsh; end-to-end tests build the examples with gmsh and are skipped without it. Tests of
-the Python nonlinear solve are skipped without PyTorch and diffcohesive; tests comparing
-the two engines run when Julia is installed and the engine environment is set up
+generalized plane strain against a 3D extrusion, laminate theory against closed forms and
+a layered finite-element RVE) run on structured meshes and need no gmsh; end-to-end tests
+build the examples with gmsh and are skipped without it. Tests of the TensorMesh engine's
+nonlinear solve are skipped without PyTorch and diffcohesive; tests comparing the two
+engines run when Julia is installed and the engine environment is set up
 (`rve2d doctor --setup-julia`).
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs ruff, mypy and the

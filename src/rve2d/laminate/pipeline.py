@@ -3,7 +3,8 @@
 1. Build the RVE (geometry, mesh) from the config.
 2. Ply stiffness: linear homogenization of the RVE (either engine).
 3. Ply curves (for the tensile test): nonlinear RVE solves under uniaxial stress, transverse
-   (RVE xx) and in-plane shear (RVE xz; a 2D RVE is extruded into a thin 3D slab for it).
+   (RVE xx) and in-plane shear (RVE xz; for a 2D RVE on one periodic layer of tetrahedra
+   extruded from its mesh).
 4. For every stacking sequence: CLT and 3D effective stiffness, engineering constants and the
    tensile test (stress, strain, elongation, force).
 
@@ -12,7 +13,7 @@ Output layout (under the output directory)::
     rve/                      RVE mesh and geometry metadata
     ply/elastic/              linear homogenization of the RVE
     ply/transverse_tension/   nonlinear RVE solve, xx
-    ply/shear/                nonlinear RVE solve, xz (2D: with the slab mesh)
+    ply/shear/                nonlinear RVE solve, xz (2D: on the extruded layer rve_layer.msh)
     ply/ply_properties.json   ply stiffness, curves and strengths (reusable: --ply)
     laminates/summary.csv     one row per stacking sequence
     laminates/<sequence>/     abd.csv, constants.json, tensile_test.csv, ...
@@ -49,6 +50,7 @@ from rve2d.laminate.ply import (
     ply_from_homogenization,
 )
 from rve2d.laminate.tensile import TensileResult, TensileSettings, tensile_test
+from rve2d.mesh_io import extrude_mesh
 
 
 @dataclass(frozen=True)
@@ -126,7 +128,13 @@ def run_laminate_pipeline(
         "ply_curves": {
             name: None
             if curve is None
-            else {"peak_stress": curve.peak_stress, "strain_at_peak": curve.strain_at_peak}
+            else {
+                "peak_stress": curve.peak_stress,
+                "strain_at_peak": curve.strain_at_peak,
+                "max_strain": curve.max_strain,  # the RVE solve's last converged strain
+                "completed": curve.completed,  # false: stopped before the requested strain
+                "source": curve.source,
+            }
             for name, curve in (
                 ("transverse_tension", ply.transverse_tension),
                 ("transverse_compression", ply.transverse_compression),
@@ -171,7 +179,10 @@ def ply_properties_from_rve(
             )  # fmt: skip
         shear_config, shear_mesh = config, mesh
         if config.dimension == 2:
-            shear_config, shear_mesh = _shear_slab(config, out / "ply" / "shear")
+            # The longitudinal shears need the z displacement: solve the z-invariant 3D
+            # problem on one periodic layer of tetrahedra extruded from the 2D mesh.
+            shear_mesh = extrude_mesh(mesh, out / "ply" / "shear" / "rve_layer.msh")
+            shear_config = dataclasses.replace(config, dimension=3)
         curves["shear"] = _curve(
             shear_config, shear_mesh, out / "ply" / "shear", "xz", lam.shear_max_strain,
             "solid", engine,
@@ -218,23 +229,7 @@ def _curve(
     )
     result = solve_nonlinear(dataclasses.replace(config, nonlinear=nonlinear), mesh, out, engine)
     curve = curve_from_response(result.response_path, component)
-    if not result.completed:
-        curve = dataclasses.replace(curve, source=f"{curve.source} (stopped early)")
-    return curve
-
-
-def _shear_slab(config: RVEConfig, out: Path) -> tuple[RVEConfig, Path]:
-    """A thin 3D slab of the 2D RVE (fibres through the thickness) for the shear curve."""
-    from rve2d.meshing.gmsh_builder import build_mesh_with_gmsh
-    from rve2d.models import extrude_geometry
-    from rve2d.workflow import build_geometry
-
-    geometry, _ = build_geometry(config)
-    depth = config.laminate.shear_slab_depth or 2.0 * config.mesh.element_size_max
-    slab = extrude_geometry(geometry, depth)
-    out.mkdir(parents=True, exist_ok=True)
-    mesh = build_mesh_with_gmsh(slab, config.mesh, out / "shear_slab.msh").mesh_path
-    return dataclasses.replace(config, dimension=3), Path(mesh)
+    return dataclasses.replace(curve, completed=result.completed)
 
 
 def _analyse(laminate: Laminate, folder: Path, settings: TensileSettings | None) -> dict[str, Any]:
@@ -276,6 +271,7 @@ def _analyse(laminate: Laminate, folder: Path, settings: TensileSettings | None)
                 "first_transverse_damage_strain": _event_strain(summary["first_transverse_damage"]),
                 "first_shear_damage_strain": _event_strain(summary["first_shear_damage"]),
                 "first_fibre_failure_strain": _event_strain(summary["first_fibre_failure"]),
+                "curve_exceeded_strain": _event_strain(summary["first_curve_exceeded"]),
                 "elongation_at_peak": result.records[peak].get("elongation", ""),
                 "force_at_peak": result.records[peak].get("force", ""),
             }
@@ -333,11 +329,19 @@ def _plot(tests: list[TensileResult], path: Path, settings: TensileSettings) -> 
     return path
 
 
+_SUBSCRIPTS = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+
+
 def _slug(name: str) -> str:
-    text = name.replace("±", "pm").replace("∓", "mp").replace("+-", "pm").replace("-+", "mp")
-    text = re.sub(r"[\[\]\s()]", "", text).replace("/", "_").replace(",", "_")
-    text = text.replace("-", "m").replace(".", "p")
-    return re.sub(r"[^A-Za-z0-9_]+", "", text) or "laminate"
+    """Folder name of a stacking sequence: [0/±45/90]2s -> 0_pm45_90-2s, [0_2/-30]T -> 0x2_m30-T."""
+    text = re.sub(r"\s+", "", name).replace("̄", "b")
+    text = re.sub("[₀-₉]+", lambda m: "_" + m.group().translate(_SUBSCRIPTS), text)
+    for old, new in (("±", "pm"), ("∓", "mp"), ("+-", "pm"), ("-+", "mp"), ("-", "m"), ("+", "")):
+        text = text.replace(old, new)
+    text = text.replace(")_", ")").replace("_", "x").replace(")", "x").replace("(", "")
+    text = text.replace("/", "_").replace(",", "_").replace(".", "p")
+    text = re.sub(r"\](?=.)", "-", text).replace("[", "").replace("]", "")
+    return re.sub(r"[^A-Za-z0-9_-]+", "", text) or "laminate"
 
 
 def _unique(slug: str, used: set[str]) -> str:

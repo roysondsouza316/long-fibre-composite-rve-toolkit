@@ -154,3 +154,33 @@ def test_julia_engine_matches_tensormesh_engine(tmp_path: Path) -> None:
     assert np.abs(stress_p - stress_j).max() < 1e-9 * np.abs(stress_p).max()
     damage_p = [r.mean_damage for r in tensormesh.records]
     assert [r.mean_damage for r in julia.records] == pytest.approx(damage_p, abs=1e-10)
+
+
+@requires_julia
+def test_engines_agree_on_longitudinal_shear_of_an_extruded_layer(tmp_path: Path) -> None:
+    """The shear curve of the laminate pipeline for a 2D RVE: xz shear on one periodic layer
+    of tetrahedra extruded from the 2D mesh, where every node is on the top or bottom face."""
+    pytest.importorskip("torch")
+    pytest.importorskip("diffcohesive")
+    from rve2d.mesh_io import extrude_mesh
+    from rve2d.workflow import solve_nonlinear
+
+    flat = structured_mesh(tmp_path / "flat.msh", n=8)
+    mesh = extrude_mesh(flat, tmp_path / "layer.msh", depth=0.125)
+    base = nonlinear_config("julia")
+    load = dataclasses.replace(base.nonlinear.load, component="xz", max_strain=0.04, steps=8)
+    nonlinear = dataclasses.replace(base.nonlinear, kinematics="solid", load=load)
+    config = dataclasses.replace(base, dimension=3, nonlinear=nonlinear)
+    tm_config = dataclasses.replace(
+        config, nonlinear=dataclasses.replace(nonlinear, engine="tensormesh")
+    )
+    julia = solve_nonlinear(config, mesh, tmp_path / "julia")
+    tensormesh = solve_nonlinear(tm_config, mesh, tmp_path / "tensormesh")
+    assert julia.completed and tensormesh.completed
+    assert tensormesh.records[-1].yielded_fraction > 0.0  # nonlinear in shear
+    assert [r.iterations for r in julia.records] == [r.iterations for r in tensormesh.records]
+    stress_p = np.array([r.macro_stress for r in tensormesh.records])
+    stress_j = np.array([r.macro_stress for r in julia.records])
+    assert np.abs(stress_p - stress_j).max() < 1e-9 * np.abs(stress_p).max()
+    # only the loaded shear carries stress (uniaxial stress in xz)
+    assert np.abs(stress_p[:, [0, 1, 2, 3, 5]]).max() < 1e-6 * np.abs(stress_p[:, 4]).max()

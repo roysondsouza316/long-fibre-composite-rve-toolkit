@@ -12,7 +12,7 @@ env:
 
 jobs:
   lint-and-test:
-    name: lint + tests, Python engine (Python ${{ matrix.python-version }})
+    name: lint + tests, TensorMesh engine (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -103,7 +103,7 @@ jobs:
             -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 
   engine-parity:
-    name: Python engine vs Julia engine
+    name: TensorMesh engine vs Julia engine
     runs-on: ubuntu-latest
 
     steps:

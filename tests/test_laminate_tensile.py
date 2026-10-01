@@ -103,3 +103,15 @@ def test_elongation_force_and_files(tmp_path: Path) -> None:
     header = curve.read_text().splitlines()[0]
     assert header.startswith("strain,stress,") and "elongation" in header and "force" in header
     assert '"initial_modulus"' in summary.read_text()
+
+
+def test_rising_curves_and_curve_ends_are_reported() -> None:
+    rising = PlyCurve(np.array([0.0, 0.01, 0.02]), np.array([0.0, 40.0, 50.0]))
+    laminate = Laminate.from_sequence(carbon_ply(transverse_tension=rising), "[90_4]", 0.2)
+    result = tensile_test(laminate, TensileSettings(max_strain=0.03, steps=30))
+    assert "transverse peak passed" not in {event["event"] for event in result.events}
+    summary = result.summary()
+    assert summary["first_transverse_damage"] is None  # no peak inside a rising curve
+    assert summary["first_curve_exceeded"]["event"] == "transverse curve exceeded"
+    assert summary["first_curve_exceeded"]["strain"] == pytest.approx(0.02, abs=1e-3)
+    assert result.stress[-1] == pytest.approx(50.0)  # held at the last value of the curve
