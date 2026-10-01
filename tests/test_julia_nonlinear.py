@@ -184,3 +184,37 @@ def test_engines_agree_on_longitudinal_shear_of_an_extruded_layer(tmp_path: Path
     assert np.abs(stress_p - stress_j).max() < 1e-9 * np.abs(stress_p).max()
     # only the loaded shear carries stress (uniaxial stress in xz)
     assert np.abs(stress_p[:, [0, 1, 2, 3, 5]]).max() < 1e-6 * np.abs(stress_p[:, 4]).max()
+
+
+@requires_julia
+def test_engines_agree_with_a_pressure_dependent_damaging_matrix(tmp_path: Path) -> None:
+    """Paraboloidal plasticity (compressive yield 1.5x tensile, plastic Poisson 0.3) with
+    ductile damage in the matrix, under transverse compression."""
+    pytest.importorskip("torch")
+    pytest.importorskip("diffcohesive")
+    from rve2d.workflow import solve_nonlinear
+
+    mesh = structured_mesh(tmp_path / "rve.msh", n=12)
+    matrix = {
+        "youngs_modulus": 3500.0, "poisson_ratio": 0.35, "yield_stress": 40.0,
+        "hardening_modulus": 300.0, "compressive_yield_stress": 60.0,
+        "plastic_poisson_ratio": 0.3, "damage_onset_strain": 0.002, "fracture_energy": 0.3,
+    }  # fmt: skip
+    config = nonlinear_config(
+        "julia", matrix=matrix, load={"max_strain": -0.03, "steps": 12}
+    )
+    tm_config = dataclasses.replace(
+        config, nonlinear=dataclasses.replace(config.nonlinear, engine="tensormesh")
+    )
+    julia = solve_nonlinear(config, mesh, tmp_path / "julia")
+    tensormesh = solve_nonlinear(tm_config, mesh, tmp_path / "tensormesh")
+    assert julia.completed and tensormesh.completed
+    assert tensormesh.records[-1].mean_bulk_damage > 0.05  # the matrix damages ...
+    stress_xx = [r.macro_stress[0] for r in tensormesh.records]
+    assert abs(stress_xx[-1]) < 0.5 * max(abs(s) for s in stress_xx)  # ... and softens
+    assert [r.iterations for r in julia.records] == [r.iterations for r in tensormesh.records]
+    stress_p = np.array([r.macro_stress for r in tensormesh.records])
+    stress_j = np.array([r.macro_stress for r in julia.records])
+    assert np.abs(stress_p - stress_j).max() < 1e-9 * np.abs(stress_p).max()
+    damage_p = [r.mean_bulk_damage for r in tensormesh.records]
+    assert [r.mean_bulk_damage for r in julia.records] == pytest.approx(damage_p, abs=1e-10)

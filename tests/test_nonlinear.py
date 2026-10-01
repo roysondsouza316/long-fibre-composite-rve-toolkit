@@ -21,10 +21,14 @@ from rve2d.engines.tensormesh.mesh import RVEMesh, insert_cohesive_interfaces  #
 from rve2d.engines.tensormesh.nonlinear.assembly import RVESystem  # noqa: E402
 from rve2d.engines.tensormesh.nonlinear.laws import build_traction_law  # noqa: E402
 from rve2d.engines.tensormesh.nonlinear.material import (  # noqa: E402
+    MAX_DAMAGE,
+    ElementMaterial,
     PlasticState,
+    damage_rate,
     element_material,
     initial_state,
     j2_return_mapping,
+    return_mapping,
 )
 from rve2d.engines.tensormesh.nonlinear.solver import (  # noqa: E402
     LoadPath,
@@ -220,6 +224,117 @@ def test_j2_consistent_tangent_matches_finite_differences() -> None:
         torch.testing.assert_close(tangent[:, :, j], fd, rtol=1e-6, atol=1e-4)
 
 
+# -- pressure-dependent plasticity and ductile damage --------------------------------------
+def epoxy(
+    n: int = 1,
+    compressive: float = 90.0,
+    plastic_poisson: float = 0.3,
+    onset: float | None = None,
+    rate: float = 0.0,
+    hardening: float = 300.0,
+) -> ElementMaterial:
+    def full(value: float) -> torch.Tensor:
+        return torch.full((n,), value, dtype=F64)
+
+    return element_material(
+        full(3500.0), full(0.35), full(60.0), full(hardening),
+        compressive_yield_stress=full(compressive), plastic_poisson_ratio=full(plastic_poisson),
+        damage_onset=None if onset is None else full(onset), damage_rate=full(rate),
+    )  # fmt: skip
+
+
+def uniaxial_stress_path(
+    material: ElementMaterial, strains: np.ndarray
+) -> tuple[list[float], list[float], PlasticState]:
+    """Axial stress and equivalent plastic strain along a uniaxial-stress path (the five other
+    stresses kept at zero)."""
+    state = initial_state(1, F64, torch.device("cpu"))
+    strain = torch.zeros(1, 6, dtype=F64)
+    stresses, eqps = [], []
+    for exx in strains:
+        strain[0, 0] = exx
+        for _ in range(50):
+            stress, tangent, _, _ = return_mapping(strain, state, material)
+            if float(stress[0, 1:].abs().max()) < 1e-10:
+                break
+            strain[0, 1:] -= torch.linalg.solve(tangent[0, 1:, 1:], stress[0, 1:])
+        stress, _, state, _ = return_mapping(strain, state, material)
+        stresses.append(float(stress[0, 0]))
+        eqps.append(float(state.equivalent_plastic_strain[0]))
+    return stresses, eqps, state
+
+
+def test_paraboloid_with_equal_yield_stresses_is_j2() -> None:
+    torch.manual_seed(2)
+    n = 200
+    strain = 0.03 * torch.randn(n, 6, dtype=F64)
+    state = PlasticState(0.005 * torch.randn(n, 6, dtype=F64), 0.01 * torch.rand(n, dtype=F64))
+    j2 = j2_return_mapping(strain, state, epoxy(n, compressive=60.0, plastic_poisson=0.5))
+    # damage switched on but never reached forces the general (paraboloidal) return mapping
+    general = return_mapping(
+        strain, state, epoxy(n, compressive=60.0, plastic_poisson=0.5, onset=1e9, rate=1.0)
+    )
+    assert int(general[3].sum()) > n // 2
+    torch.testing.assert_close(general[0], j2[0], rtol=0, atol=1e-11)
+    torch.testing.assert_close(general[1], j2[1], rtol=0, atol=1e-9)
+    torch.testing.assert_close(general[2].plastic_strain, j2[2].plastic_strain, rtol=0, atol=1e-15)
+
+
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_paraboloid_yields_at_the_tensile_and_compressive_yield_stress(sign: float) -> None:
+    youngs, st, sc, hardening = 3500.0, 60.0, 90.0, 300.0
+    strains = sign * np.linspace(0.0, 0.06, 61)[1:]
+    stresses, _, state = uniaxial_stress_path(epoxy(compressive=sc), strains)
+    yield_stress = st if sign > 0 else sc
+    slope = hardening * (1.0 if sign > 0 else sc / st)  # compression hardens in proportion
+    for strain, stress in zip(strains, stresses, strict=True):
+        elastic = youngs * abs(strain)
+        plastic = yield_stress + youngs * slope / (youngs + slope) * (
+            abs(strain) - yield_stress / youngs
+        )
+        assert abs(stress) == pytest.approx(min(elastic, plastic), rel=1e-9)  # bilinear curve
+    plastic_strain = state.plastic_strain[0]
+    assert float(-plastic_strain[1] / plastic_strain[0]) == pytest.approx(0.3)  # plastic Poisson
+    assert float(state.equivalent_plastic_strain[0]) == pytest.approx(abs(float(plastic_strain[0])))
+
+
+def test_paraboloid_and_damage_tangent_matches_finite_differences() -> None:
+    torch.manual_seed(0)
+    n = 200
+    material = epoxy(n, onset=0.005, rate=20.0)
+    strain = 0.03 * torch.randn(n, 6, dtype=F64)
+    state = PlasticState(0.005 * torch.randn(n, 6, dtype=F64), 0.01 * torch.rand(n, dtype=F64))
+    _, tangent, new_state, yielding = return_mapping(strain, state, material)
+    damaging = (new_state.equivalent_plastic_strain - 0.005) * 20.0
+    assert (
+        int(yielding.sum()) > n // 2 and int(((damaging > 0) & (damaging < MAX_DAMAGE)).sum()) > 50
+    )
+    assert float((tangent - tangent.transpose(1, 2)).abs().max()) > 1.0  # not symmetric
+    h = 1e-7
+    for j in range(6):
+        plus, minus = strain.clone(), strain.clone()
+        plus[:, j] += h
+        minus[:, j] -= h
+        fd = return_mapping(plus, state, material)[0] - return_mapping(minus, state, material)[0]
+        torch.testing.assert_close(tangent[:, :, j], fd / (2 * h), rtol=1e-6, atol=1e-4)
+
+
+def test_damage_dissipates_the_fracture_energy_over_the_crack_band() -> None:
+    length, energy, onset, st = 0.002, 0.09, 0.01, 60.0  # mm, N/mm, -, MPa
+    values = (length, st, 0.0, onset, energy)
+    rate = float(damage_rate(*(torch.tensor([v], dtype=F64) for v in values))[0])
+    material = epoxy(compressive=st, plastic_poisson=0.5, onset=onset, rate=rate, hardening=0.0)
+    strains = np.linspace(0.0, st / 3500.0 + onset + 1.2 / rate, 4001)[1:]
+    stresses, eqps, _ = uniaxial_stress_path(material, strains)
+    stress, plastic = np.array(stresses), np.array(eqps)
+    damage = np.clip(rate * (plastic - onset), 0.0, MAX_DAMAGE)
+    np.testing.assert_allclose(stress[plastic > 0], (1.0 - damage[plastic > 0]) * st, rtol=1e-9)
+    softening = (plastic >= onset) & (damage < MAX_DAMAGE)
+    work = np.trapezoid(stress[softening], plastic[softening])  # per unit volume
+    expected = energy / length * (1.0 - (1.0 - MAX_DAMAGE) ** 2)  # G_f over the crack band
+    assert work == pytest.approx(expected, rel=2e-3)
+
+
 # -- traction-separation law --------------------------------------------------------------
 @pytest.mark.parametrize(
     ("stiffness", "strength", "toughness"), [(1e8, 50.0, 0.002), (1e17, 50e6, 2.0)]
@@ -366,6 +481,9 @@ def _nonlinear_config(**overrides: object) -> dict[str, object]:
     }
 
 
+EPOXY = {"youngs_modulus": 3500.0, "poisson_ratio": 0.35, "yield_stress": 60.0}
+
+
 def test_nonlinear_config_is_parsed_with_nested_sections() -> None:
     config = config_from_dict(_nonlinear_config())
     assert config.nonlinear.enabled
@@ -426,6 +544,16 @@ def test_nonlinear_config_is_parsed_with_nested_sections() -> None:
             },
             "for the exponential law",
         ),
+        ({"matrix": {**EPOXY, "compressive_yield_stress": 40.0}}, "at least yield_stress"),
+        ({"matrix": {**EPOXY, "compressive_yield_stress": 90.0}}, "plastic_poisson_ratio < 0.5"),
+        ({"matrix": {**EPOXY, "plastic_poisson_ratio": 0.6}}, r"lie in \[0, 0.5\]"),
+        ({"matrix": {**EPOXY, "damage_onset_strain": 0.01}}, "both damage_onset_strain"),
+        ({"matrix": {**EPOXY, "fracture_energy": 0.1, "damage_onset_strain": -1.0}}, "negative"),
+        (
+            {"matrix": {"youngs_modulus": 3500.0, "poisson_ratio": 0.35, "fracture_energy": 0.1,
+                        "damage_onset_strain": 0.01}},
+            "need a yield_stress",
+        ),  # fmt: skip
     ],
 )
 def test_nonlinear_config_validation(overrides: dict[str, object], message: str) -> None:

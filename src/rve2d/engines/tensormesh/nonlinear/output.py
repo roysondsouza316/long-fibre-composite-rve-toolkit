@@ -10,7 +10,7 @@ import torch
 
 from rve2d.engines.common.records import COMPONENTS
 from rve2d.engines.tensormesh.nonlinear.assembly import Evaluation, RVESystem
-from rve2d.engines.tensormesh.nonlinear.material import von_mises
+from rve2d.engines.tensormesh.nonlinear.material import bulk_damage, von_mises
 from rve2d.engines.tensormesh.nonlinear.solver import SolverState
 
 
@@ -49,6 +49,12 @@ def write_fields(
             state.plastic.equivalent_plastic_strain.detach().cpu().numpy()
         ],
         "von_mises": [von_mises(evaluation.stress).detach().cpu().numpy()],
+        "bulk_damage": [
+            bulk_damage(state.plastic.equivalent_plastic_strain, system.material)
+            .detach()
+            .cpu()
+            .numpy()
+        ],
     }
     for index, comp in enumerate(COMPONENTS):
         cell_data[f"stress_{comp}"] = [stress[:, index]]

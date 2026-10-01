@@ -26,6 +26,7 @@ _RECORD_COLUMNS = (
     "mean_eqps_matrix",
     "mean_eqps_fibre",
     "work_density",
+    "mean_bulk_damage",
 )
 
 
@@ -64,6 +65,7 @@ class StepRecord:
     mean_eqps_matrix: float
     mean_eqps_fibre: float
     work_density: float
+    mean_bulk_damage: float = 0.0  # volume average over the damaging phases
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,7 @@ def write_response_csv(path: Path, records: list[StepRecord]) -> Path:
                     r.mean_eqps_matrix,
                     r.mean_eqps_fibre,
                     r.work_density,
+                    r.mean_bulk_damage,
                 ]
             )
     return path
@@ -138,6 +141,7 @@ def read_response_csv(path: Path) -> list[StepRecord]:
                     mean_eqps_matrix=float(row["mean_eqps_matrix"]),
                     mean_eqps_fibre=float(row["mean_eqps_fibre"]),
                     work_density=float(row["work_density"]),
+                    mean_bulk_damage=float(row.get("mean_bulk_damage") or 0.0),
                 )
             )
     return records

@@ -20,7 +20,11 @@ import torch
 from rve2d.engines.common.records import LoadPath, StepRecord
 from rve2d.engines.tensormesh.nonlinear import linear_solver
 from rve2d.engines.tensormesh.nonlinear.assembly import Evaluation, RVESystem
-from rve2d.engines.tensormesh.nonlinear.material import PlasticState, initial_state
+from rve2d.engines.tensormesh.nonlinear.material import (
+    PlasticState,
+    bulk_damage,
+    initial_state,
+)
 from rve2d.exceptions import SolverError
 
 
@@ -111,7 +115,7 @@ def solve_load_path(
             system, trial, free, lam * target_final, settings, backend, force_floor, stress_floor
         )
         total_iterations += iterations
-        if not converged:
+        if not converged or evaluation is None:
             cuts += 1
             dt *= 0.5
             if dt < min_dt:
@@ -171,9 +175,12 @@ def _newton(
     backend: str,
     force_floor: float,
     stress_floor: float,
-) -> tuple[bool, Evaluation, int]:
+) -> tuple[bool, Evaluation | None, int]:
     n_red = system.n_reduced
-    evaluation = _evaluate(system, trial, free, target)
+    try:
+        evaluation = _evaluate(system, trial, free, target)
+    except SolverError:  # a material return mapping failed: cut the increment
+        return False, None, 0
     history: list[float] = []
     for iteration in range(1, settings.max_iterations + 1):
         error = _error(system, evaluation, free, force_floor, stress_floor)
@@ -197,7 +204,10 @@ def _newton(
             trial.macro_strain = base_e.clone()
             if free:
                 trial.macro_strain[free] = base_e[free] + alpha * step[n_red:]
-            candidate = _evaluate(system, trial, free, target)
+            try:
+                candidate = _evaluate(system, trial, free, target)
+            except SolverError:
+                return False, None, iteration
             candidate_error = _error(system, candidate, free, force_floor, stress_floor)
             if math.isfinite(candidate_error) and candidate_error < error:
                 break
@@ -263,6 +273,8 @@ def _record(
         damaged = float((weights * (damage >= 0.99)).sum() / weights.sum())
         mean_damage = float((weights * damage).sum() / weights.sum())
     yielded = float(vol[eqps > 0].sum() / vol.sum())
+    damaging = torch.isfinite(system.material.damage_onset)
+    mean_bulk_damage = mean(bulk_damage(eqps, system.material), damaging)
     return StepRecord(
         time=t,
         load_factor=lam,
@@ -276,4 +288,5 @@ def _record(
         mean_eqps_matrix=mean(eqps, matrix),
         mean_eqps_fibre=mean(eqps, fibre),
         work_density=work,
+        mean_bulk_damage=mean_bulk_damage,
     )

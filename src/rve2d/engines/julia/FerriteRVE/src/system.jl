@@ -147,6 +147,8 @@ function RVESystem(mesh::RVEMesh{dim}, materials::Vector{PhaseMaterial}, law,
         end
     end
     all(>(0), node_dofs) || error("mesh has nodes without degrees of freedom")
+    materials = [with_characteristic_length(materials[c], characteristic_length(volumes[c], dim))
+                 for c in 1:n_cells(mesh)]
     dofmap = build_dof_map(mesh, node_dofs, ndofs(dh), boundary_condition)
     cohesive = cohesive_geometry(mesh, integration)
     N = law === nothing ? 1 : state_length(law)
@@ -224,9 +226,10 @@ function evaluate(sys::RVESystem{dim, L, N, NQ}, w::AbstractVector, E::AbstractV
     nfree = length(free)
     basis = [voigt_basis(k) for k in free]
     k_we_full = zeros(n_full, nfree)
+    k_ew_full = zeros(n_full, nfree)  # K_Ew transposed: the tangent need not be symmetric
     k_ee = zeros(nfree, nfree)
 
-    # Bulk: J2 plasticity on constant-strain simplices.
+    # Bulk: plasticity (and damage) on constant-strain simplices.
     Emacro = macro_tensor(E)
     n_cell = n_cells(sys.mesh)
     stress = Vector{SymmetricTensor{2, 3, Float64, 6}}(undef, n_cell)
@@ -244,7 +247,7 @@ function evaluate(sys::RVESystem{dim, L, N, NQ}, w::AbstractVector, E::AbstractV
         for i in 1:nb
             strain += w_full[sys.cell_dofs[i, cell]] * sys.strain_basis[i, cell]
         end
-        σ, C, state, _ = j2_update(strain, plastic[cell], sys.materials[cell])
+        σ, C, state, _ = material_update(strain, plastic[cell], sys.materials[cell])
         stress[cell] = σ
         new_plastic[cell] = state
         V = sys.volumes[cell]
@@ -270,6 +273,7 @@ function evaluate(sys::RVESystem{dim, L, N, NQ}, w::AbstractVector, E::AbstractV
             CB = C ⊡ Bk
             for i in 1:nb
                 k_we_full[sys.cell_dofs[i, cell], k] += V * (sys.strain_basis[i, cell] ⊡ CB)
+                k_ew_full[sys.cell_dofs[i, cell], k] += V * (Bk ⊡ c_eps[i])
             end
             for (l, Bl) in enumerate(basis)
                 k_ee[l, k] += V * (Bl ⊡ CB)
@@ -295,12 +299,15 @@ function evaluate(sys::RVESystem{dim, L, N, NQ}, w::AbstractVector, E::AbstractV
     if with_tangent
         nr = n_reduced(sys)
         k_we = zeros(nr, nfree)
+        k_ew = zeros(nr, nfree)
         for (dof, r) in enumerate(f2r)
-            r > 0 && (k_we[r, :] .+= view(k_we_full, dof, :))
+            r > 0 || continue
+            k_we[r, :] .+= view(k_we_full, dof, :)
+            k_ew[r, :] .+= view(k_ew_full, dof, :)
         end
         for k in 1:nfree, r in 1:nr
             add_entry!(triplets, r, nr + k, k_we[r, k])
-            add_entry!(triplets, nr + k, r, k_we[r, k])
+            add_entry!(triplets, nr + k, r, k_ew[r, k])
         end
         for k in 1:nfree, l in 1:nfree
             add_entry!(triplets, nr + l, nr + k, k_ee[l, k])

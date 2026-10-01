@@ -7,13 +7,14 @@ function write_response_csv(path::AbstractString, records::Vector{StepRecord})
     header = vcat(["step", "time", "load_factor"], ["e_$c" for c in COMPONENTS],
         ["s_$c" for c in COMPONENTS],
         ["iterations", "max_damage", "debonded_fraction", "mean_damage", "yielded_fraction",
-            "mean_eqps_matrix", "mean_eqps_fibre", "work_density"])
+            "mean_eqps_matrix", "mean_eqps_fibre", "work_density", "mean_bulk_damage"])
     open(path, "w") do io
         println(io, join(header, ","))
         for (index, r) in enumerate(records)
             row = Any[index - 1, r.time, r.load_factor, r.macro_strain..., r.macro_stress...,
                 r.iterations, r.max_damage, r.damaged_fraction, r.mean_damage,
-                r.yielded_fraction, r.mean_eqps_matrix, r.mean_eqps_fibre, r.work_density]
+                r.yielded_fraction, r.mean_eqps_matrix, r.mean_eqps_fibre, r.work_density,
+                r.mean_bulk_damage]
             println(io, join(string.(row), ","))
         end
     end
@@ -40,6 +41,8 @@ function write_fields(output_dir::AbstractString, stem::AbstractString, sys::RVE
         write_cell_data(vtk, [p.equivalent_plastic_strain for p in state.plastic],
             "equivalent_plastic_strain")
         write_cell_data(vtk, von_mises.(evaluation.stress), "von_mises")
+        write_cell_data(vtk, [bulk_damage(p.equivalent_plastic_strain, m)
+                              for (p, m) in zip(state.plastic, sys.materials)], "bulk_damage")
         for (k, name) in enumerate(COMPONENTS)
             i, j = VOIGT_INDEX[k]
             write_cell_data(vtk, [σ[i, j] for σ in evaluation.stress], "stress_$name")

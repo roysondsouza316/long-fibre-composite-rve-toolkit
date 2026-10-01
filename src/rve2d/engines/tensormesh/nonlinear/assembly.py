@@ -30,7 +30,7 @@ from rve2d.engines.tensormesh.nonlinear.cohesive import (
 from rve2d.engines.tensormesh.nonlinear.material import (
     ElementMaterial,
     PlasticState,
-    j2_return_mapping,
+    return_mapping,
 )
 
 
@@ -177,9 +177,7 @@ class RVESystem:
             torch.einsum("eij,ej->ei", strain_matrix, w_full[self.bulk.dofs])
             + macro_strain[None, :]
         )
-        stress, tangent, new_state, yielding = j2_return_mapping(
-            strain, plastic_state, self.material
-        )
+        stress, tangent, new_state, yielding = return_mapping(strain, plastic_state, self.material)
 
         element_forces = torch.einsum("eji,ej->ei", strain_matrix, stress) * vol[:, None]
         residual_full = torch.zeros(self.n_full, dtype=self.dtype, device=self.device)
@@ -252,16 +250,18 @@ class RVESystem:
         n_free = len(free_macro)
         size = self.n_reduced + n_free
         if n_free:
-            # K_wE (reduced) and K_EE for the stress-controlled macro components.
+            # K_wE, K_Ew (reduced) and K_EE for the stress-controlled macro components; the
+            # material tangent need not be symmetric (non-associative flow, damage).
             k_we_elem = (
                 torch.einsum("eji,ejk->eik", strain_matrix, tangent[:, :, free_macro])
                 * vol[:, None, None]
             )
-            k_we_full = torch.zeros(self.n_full, n_free, dtype=self.dtype, device=self.device)
-            k_we_full = k_we_full.index_add(
-                0, self.bulk.dofs.reshape(-1), k_we_elem.reshape(-1, n_free)
+            k_ew_elem = (  # [e, j, k] = (C[free_k, :] B)[j]
+                torch.einsum("eki,eij->ejk", tangent[:, free_macro, :], strain_matrix)
+                * vol[:, None, None]
             )
-            k_we = self.reduce_vector(k_we_full)  # (n_reduced, n_free)
+            k_we = self._reduce_columns(k_we_elem, n_free)  # (n_reduced, n_free)
+            k_ew = self._reduce_columns(k_ew_elem, n_free)  # (n_reduced, n_free), transposed
             k_ee = (tangent[:, free_macro][:, :, free_macro] * vol[:, None, None]).sum(dim=0)
             r_idx = torch.arange(self.n_reduced, device=self.device)
             border = self.n_reduced + torch.arange(n_free, device=self.device)
@@ -271,5 +271,11 @@ class RVESystem:
             ee_c = border[None, :].expand(n_free, -1).reshape(-1)
             row = torch.cat([row, rr, cc, ee_r])
             col = torch.cat([col, cc, rr, ee_c])
-            val = torch.cat([val, k_we.reshape(-1), k_we.reshape(-1), k_ee.reshape(-1)])
+            val = torch.cat([val, k_we.reshape(-1), k_ew.reshape(-1), k_ee.reshape(-1)])
         return SparseSystem(row.detach(), col.detach(), val.detach(), size)
+
+    def _reduce_columns(self, element_columns: torch.Tensor, n_free: int) -> torch.Tensor:
+        """Assemble per-element ``(n_elem_dofs, n_free)`` blocks and reduce them."""
+        full = torch.zeros(self.n_full, n_free, dtype=self.dtype, device=self.device)
+        full = full.index_add(0, self.bulk.dofs.reshape(-1), element_columns.reshape(-1, n_free))
+        return self.reduce_vector(full)

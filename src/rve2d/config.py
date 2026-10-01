@@ -213,12 +213,26 @@ FerriteSolveConfig = SolverConfig  # name used before the engines were split
 
 @dataclass(frozen=True)
 class PhaseMaterialConfig:
-    """Isotropic elastic phase with optional J2 plasticity (linear isotropic hardening)."""
+    """Isotropic elastic phase with optional plasticity and ductile damage.
+
+    Plasticity (with ``yield_stress``): von Mises (J2) by default; with a larger
+    ``compressive_yield_stress`` the pressure-dependent paraboloidal surface of polymer
+    matrices (Tschoegl; Melro et al. 2013) with non-associative flow set by
+    ``plastic_poisson_ratio`` (0.5: no plastic volume change). ``hardening_modulus`` is the
+    linear hardening in tension (compression scales with it). Ductile damage (with
+    ``damage_onset_strain`` and ``fracture_energy``): beyond that equivalent plastic strain the
+    stiffness degrades with the plastic displacement over one element (crack band), so that
+    a crack dissipates about ``fracture_energy`` per unit area.
+    """
 
     youngs_modulus: float
     poisson_ratio: float
     yield_stress: float | None = None
     hardening_modulus: float = 0.0
+    compressive_yield_stress: float | None = None
+    plastic_poisson_ratio: float = 0.5
+    damage_onset_strain: float | None = None
+    fracture_energy: float | None = None
 
 
 @dataclass(frozen=True)
@@ -766,6 +780,41 @@ NONLINEAR_ACTIVE_COMPONENTS = {
 }
 
 
+def _validate_phase_plasticity(phase: PhaseMaterialConfig, label: str) -> None:
+    extras = (
+        phase.compressive_yield_stress is not None
+        or phase.plastic_poisson_ratio != 0.5
+        or phase.damage_onset_strain is not None
+        or phase.fracture_energy is not None
+    )
+    if phase.yield_stress is None:
+        if extras:
+            raise ConfigError(
+                f"{label}: compressive_yield_stress, plastic_poisson_ratio and damage need a "
+                "yield_stress."
+            )
+        return
+    compressive = phase.compressive_yield_stress
+    if compressive is not None and compressive < phase.yield_stress:
+        raise ConfigError(f"{label}.compressive_yield_stress must be at least yield_stress.")
+    if not 0.0 <= phase.plastic_poisson_ratio <= 0.5:
+        raise ConfigError(f"{label}.plastic_poisson_ratio must lie in [0, 0.5].")
+    if compressive is not None and compressive > phase.yield_stress:
+        if phase.plastic_poisson_ratio >= 0.5:
+            raise ConfigError(
+                f"{label}: a pressure-dependent yield surface (compressive_yield_stress > "
+                "yield_stress) needs plastic_poisson_ratio < 0.5 (plastic volume change), "
+                "e.g. 0.3."
+            )
+    onset, energy = phase.damage_onset_strain, phase.fracture_energy
+    if (onset is None) != (energy is None):
+        raise ConfigError(f"{label}: damage needs both damage_onset_strain and fracture_energy.")
+    if onset is not None and onset < 0.0:
+        raise ConfigError(f"{label}.damage_onset_strain must be non-negative.")
+    if energy is not None and energy <= 0.0:
+        raise ConfigError(f"{label}.fracture_energy must be positive.")
+
+
 def _validate_nonlinear(config: RVEConfig) -> None:
     nl = config.nonlinear
     if nl.engine not in ENGINE_NAMES:
@@ -808,6 +857,7 @@ def _validate_nonlinear(config: RVEConfig) -> None:
             )
         if phase.hardening_modulus < 0.0:
             raise ConfigError(f"nonlinear.{label}.hardening_modulus must be non-negative.")
+        _validate_phase_plasticity(phase, f"nonlinear.{label}")
     interface = nl.interface
     if interface is not None and interface.enabled:
         required = ("penalty_stiffness", "normal_strength", "mode_i_toughness")

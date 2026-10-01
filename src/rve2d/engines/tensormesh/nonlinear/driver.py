@@ -30,7 +30,11 @@ from rve2d.engines.tensormesh.mesh import RVEMesh, build_rve_mesh
 from rve2d.engines.tensormesh.nonlinear import linear_solver
 from rve2d.engines.tensormesh.nonlinear.assembly import Evaluation, RVESystem
 from rve2d.engines.tensormesh.nonlinear.laws import build_traction_law
-from rve2d.engines.tensormesh.nonlinear.material import ElementMaterial, element_material
+from rve2d.engines.tensormesh.nonlinear.material import (
+    ElementMaterial,
+    damage_rate,
+    element_material,
+)
 from rve2d.engines.tensormesh.nonlinear.output import write_fields
 from rve2d.engines.tensormesh.nonlinear.solver import (
     NewtonSettings,
@@ -56,12 +60,50 @@ def phase_material(
     def yield_stress(phase: PhaseMaterialConfig) -> float:
         return float("inf") if phase.yield_stress is None else phase.yield_stress
 
+    def compressive(phase: PhaseMaterialConfig) -> float:
+        value = phase.compressive_yield_stress
+        return yield_stress(phase) if value is None else value
+
+    def onset(phase: PhaseMaterialConfig) -> float:
+        return float("inf") if phase.damage_onset_strain is None else phase.damage_onset_strain
+
+    def energy(phase: PhaseMaterialConfig) -> float:
+        return 1.0 if phase.fracture_energy is None else phase.fracture_energy
+
+    sigma_y, hardening, damage_onset = (
+        per_element(yield_stress), per_element(lambda p: p.hardening_modulus), per_element(onset)
+    )  # fmt: skip
+    lengths = torch.as_tensor(characteristic_lengths(mesh), dtype=torch.float64, device=device)
+    enabled = torch.isfinite(damage_onset)
+    rate = damage_rate(
+        lengths,
+        torch.where(enabled, sigma_y, torch.ones_like(sigma_y)),
+        hardening,
+        torch.where(enabled, damage_onset, torch.zeros_like(damage_onset)),
+        per_element(energy),
+    )
     return element_material(
         per_element(lambda p: p.youngs_modulus),
         per_element(lambda p: p.poisson_ratio),
-        per_element(yield_stress),
-        per_element(lambda p: p.hardening_modulus),
+        sigma_y,
+        hardening,
+        compressive_yield_stress=per_element(compressive),
+        plastic_poisson_ratio=per_element(lambda p: p.plastic_poisson_ratio),
+        damage_onset=damage_onset,
+        damage_rate=torch.where(enabled, rate, torch.zeros_like(rate)),
     )
+
+
+def characteristic_lengths(mesh: RVEMesh) -> np.ndarray:
+    """Crack-band width of every bulk element: ``sqrt(2 A)`` for triangles and ``(6 V)^(1/3)``
+    for tetrahedra (the leg of a right triangle, the edge of a cube's corner tetrahedron)."""
+    corners = mesh.points[mesh.cells]
+    edges = corners[:, 1:] - corners[:, :1]
+    if mesh.dim == 2:
+        area = 0.5 * np.abs(edges[:, 0, 0] * edges[:, 1, 1] - edges[:, 0, 1] * edges[:, 1, 0])
+        return np.asarray(np.sqrt(2.0 * area))
+    volume = np.abs(np.linalg.det(edges)) / 6.0
+    return np.asarray(np.cbrt(6.0 * volume))
 
 
 def run_nonlinear(

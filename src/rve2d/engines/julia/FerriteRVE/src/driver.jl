@@ -2,11 +2,16 @@
 # rve2d.engines.julia.homogenization / .nonlinear) and write the result files.
 
 function phase_material(table::AbstractDict)
+    yield_stress = Float64(get(table, "yield_stress", Inf))
     return PhaseMaterial(;
         youngs_modulus = Float64(table["youngs_modulus"]),
         poisson_ratio = Float64(table["poisson_ratio"]),
-        yield_stress = Float64(get(table, "yield_stress", Inf)),
+        yield_stress,
         hardening_modulus = Float64(get(table, "hardening_modulus", 0.0)),
+        compressive_yield_stress = Float64(get(table, "compressive_yield_stress", yield_stress)),
+        plastic_poisson_ratio = Float64(get(table, "plastic_poisson_ratio", 0.5)),
+        damage_onset = Float64(get(table, "damage_onset_strain", Inf)),
+        fracture_energy = Float64(get(table, "fracture_energy", Inf)),
     )
 end
 

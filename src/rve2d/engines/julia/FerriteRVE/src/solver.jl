@@ -55,6 +55,7 @@ struct StepRecord
     mean_eqps_matrix::Float64
     mean_eqps_fibre::Float64
     work_density::Float64
+    mean_bulk_damage::Float64
 end
 
 struct SolveOutcome{S, E}
@@ -141,6 +142,16 @@ function evaluate_state(sys, state, free, target, dt; with_tangent = true)
 end
 
 function newton!(sys, trial, free, target, dt, settings, force_floor, stress_floor)
+    try
+        return newton_iterations!(sys, trial, free, target, dt, settings, force_floor,
+            stress_floor)
+    catch exception
+        exception isa MaterialUpdateError || rethrow()
+        return false, nothing, 0  # a return mapping failed: the increment is cut
+    end
+end
+
+function newton_iterations!(sys, trial, free, target, dt, settings, force_floor, stress_floor)
     nr = n_reduced(sys)
     evaluation = evaluate_state(sys, trial, free, target, dt)
     history = Float64[]
@@ -211,7 +222,12 @@ function record(sys, t, λ, state, evaluation, iterations, work)
         damaged = sum(weights .* (damage .>= 0.99)) / sum(weights)
         mean_damage = sum(weights .* damage) / sum(weights)
     end
+    damaging = [isfinite(m.damage_onset) for m in sys.materials]
+    damage_weight = sum(volumes[damaging])
+    mean_bulk_damage = damage_weight > 0 ?
+        sum(bulk_damage(eqps[c], sys.materials[c]) * volumes[c]
+            for c in eachindex(eqps) if damaging[c]) / damage_weight : 0.0
     return StepRecord(t, λ, copy(state.macro_strain), collect(evaluation.macro_stress),
         iterations, max_damage, damaged, mean_damage, sum(volumes[eqps .> 0]) / sum(volumes),
-        phase_mean(matrix), phase_mean(.!matrix), work)
+        phase_mean(matrix), phase_mean(.!matrix), work, mean_bulk_damage)
 end
