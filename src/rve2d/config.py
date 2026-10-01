@@ -61,16 +61,6 @@ class SemToSyntheticConfig:
     threshold: float | None = None
     invert: bool = False
     smoothing_sigma: float = 2.0
-    edge_sigma: float = 2.0
-    edge_low_threshold: float = 0.08
-    edge_high_threshold: float = 0.2
-    hough_min_radius_px: int = 18
-    hough_max_radius_px: int = 46
-    hough_radius_step_px: int = 2
-    hough_total_num_peaks: int = 120
-    hough_peak_threshold_rel: float = 0.22
-    hough_min_center_distance_px: int = 12
-    hough_overlap_buffer_px: float = 4.0
     separate_touching_fibres: bool = True
     separation_min_distance_px: int = 16
     separation_peak_threshold_px: float = 6.0
@@ -352,32 +342,6 @@ def _validate_sem_to_synthetic(config: SemToSyntheticConfig, dimension: int) -> 
         raise ConfigError("sem_to_synthetic threshold must lie between 0 and 1.")
     if config.smoothing_sigma < 0.0:
         raise ConfigError("sem_to_synthetic smoothing_sigma must be non-negative.")
-    if config.edge_sigma < 0.0:
-        raise ConfigError("sem_to_synthetic edge_sigma must be non-negative.")
-    if not 0.0 <= config.edge_low_threshold <= 1.0:
-        raise ConfigError("sem_to_synthetic edge_low_threshold must lie between 0 and 1.")
-    if not 0.0 <= config.edge_high_threshold <= 1.0:
-        raise ConfigError("sem_to_synthetic edge_high_threshold must lie between 0 and 1.")
-    if config.edge_low_threshold > config.edge_high_threshold:
-        raise ConfigError(
-            "sem_to_synthetic edge_low_threshold cannot exceed edge_high_threshold."
-        )
-    if config.hough_min_radius_px < 1:
-        raise ConfigError("sem_to_synthetic hough_min_radius_px must be at least 1.")
-    if config.hough_max_radius_px < config.hough_min_radius_px:
-        raise ConfigError(
-            "sem_to_synthetic hough_max_radius_px cannot be smaller than hough_min_radius_px."
-        )
-    if config.hough_radius_step_px < 1:
-        raise ConfigError("sem_to_synthetic hough_radius_step_px must be at least 1.")
-    if config.hough_total_num_peaks < 1:
-        raise ConfigError("sem_to_synthetic hough_total_num_peaks must be at least 1.")
-    if not 0.0 < config.hough_peak_threshold_rel <= 1.0:
-        raise ConfigError("sem_to_synthetic hough_peak_threshold_rel must lie in (0, 1].")
-    if config.hough_min_center_distance_px < 1:
-        raise ConfigError("sem_to_synthetic hough_min_center_distance_px must be at least 1.")
-    if config.hough_overlap_buffer_px < 0.0:
-        raise ConfigError("sem_to_synthetic hough_overlap_buffer_px must be non-negative.")
     if config.separation_min_distance_px < 1:
         raise ConfigError("sem_to_synthetic separation_min_distance_px must be at least 1.")
     if config.separation_peak_threshold_px < 0.0:

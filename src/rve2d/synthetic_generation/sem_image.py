@@ -13,7 +13,13 @@ from skimage.segmentation import clear_border, watershed
 
 from rve2d.config import SemToSyntheticConfig
 from rve2d.geometry_cleanup.cleanup import close_polygon
-from rve2d.models import CircleFibre, Domain2D, GeometryModel, PeriodicBoundaryPair, PolygonFibre
+from rve2d.models import (
+    CircleFibre,
+    Domain2D,
+    GeometryModel,
+    PolygonFibre,
+    periodic_boundary_pairs,
+)
 
 
 @dataclass(frozen=True)
@@ -131,7 +137,7 @@ def generate_circular_fibre_rve_from_sem(
         domain=domain,
         circular_fibres=circular_fibres,
         polygonal_fibres=polygonal_fibres,
-        periodic_pairs=_periodic_pairs(domain) if config.periodic_compatible else [],
+        periodic_pairs=periodic_boundary_pairs(domain) if config.periodic_compatible else [],
         metadata={
             "generation_mode": "sem_to_synthetic",
             "image_path": str(image_path),
@@ -517,20 +523,3 @@ def _separate_touching_regions(
     for new_label, old_label in enumerate(np.unique(separated)[1:], start=1):
         relabeled[separated == old_label] = new_label
     return relabeled
-
-
-def _periodic_pairs(domain: Domain2D) -> list[PeriodicBoundaryPair]:
-    return [
-        PeriodicBoundaryPair(
-            name="x_periodic",
-            source="left",
-            target="right",
-            translation=(domain.width, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="y_periodic",
-            source="bottom",
-            target="top",
-            translation=(0.0, domain.height),
-        ),
-    ]

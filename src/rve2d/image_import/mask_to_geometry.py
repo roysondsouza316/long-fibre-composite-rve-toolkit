@@ -11,7 +11,7 @@ from skimage.segmentation import clear_border
 
 from rve2d.config import ImageImportConfig
 from rve2d.geometry_cleanup.cleanup import close_polygon, filter_small_polygons
-from rve2d.models import Domain2D, GeometryModel, PeriodicBoundaryPair, PolygonFibre
+from rve2d.models import Domain2D, GeometryModel, PolygonFibre, periodic_boundary_pairs
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,7 @@ def import_mask_geometry(config: ImageImportConfig) -> MaskImportResult:
             PolygonFibre(points=polygon, fibre_id=index + 1)
             for index, polygon in enumerate(polygons)
         ],
-        periodic_pairs=_periodic_pairs(domain) if config.periodic_compatible else [],
+        periodic_pairs=periodic_boundary_pairs(domain) if config.periodic_compatible else [],
         metadata={
             "generation_mode": "image",
             "image_path": str(image_path),
@@ -119,20 +119,3 @@ def _remove_small_regions(mask: np.ndarray, minimum_area: int) -> tuple[np.ndarr
     kept_mask = keep[labels]
     removed_artifacts = int(np.count_nonzero((~keep)[1:]))
     return kept_mask, removed_artifacts
-
-
-def _periodic_pairs(domain: Domain2D) -> list[PeriodicBoundaryPair]:
-    return [
-        PeriodicBoundaryPair(
-            name="x_periodic",
-            source="left",
-            target="right",
-            translation=(domain.width, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="y_periodic",
-            source="bottom",
-            target="top",
-            translation=(0.0, domain.height),
-        ),
-    ]

@@ -14,7 +14,7 @@ from rve2d.image_import.mask_to_geometry import (
     _count_clipped_regions,
     _remove_small_regions,
 )
-from rve2d.models import Domain3D, ExtrudedPolygonFibre, GeometryModel, PeriodicBoundaryPair
+from rve2d.models import Domain3D, ExtrudedPolygonFibre, GeometryModel, periodic_boundary_pairs
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def import_mask_geometry_3d(config: ImageImportConfig) -> MaskImport3DResult:
             "bottom": 15,
             "top": 16,
         },
-        periodic_pairs=_periodic_pairs(domain) if config.periodic_compatible else [],
+        periodic_pairs=periodic_boundary_pairs(domain) if config.periodic_compatible else [],
         metadata={
             "generation_mode": "image_3d_extruded",
             "dimension": 3,
@@ -131,26 +131,3 @@ def import_mask_geometry_3d(config: ImageImportConfig) -> MaskImport3DResult:
         removed_artifacts=removed_artifacts,
         clipped_regions=clipped_regions,
     )
-
-
-def _periodic_pairs(domain: Domain3D) -> list[PeriodicBoundaryPair]:
-    return [
-        PeriodicBoundaryPair(
-            name="x_periodic",
-            source="left",
-            target="right",
-            translation=(domain.width, 0.0, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="y_periodic",
-            source="front",
-            target="back",
-            translation=(0.0, domain.height, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="z_periodic",
-            source="bottom",
-            target="top",
-            translation=(0.0, 0.0, domain.depth),
-        ),
-    ]

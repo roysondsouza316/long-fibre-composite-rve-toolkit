@@ -98,6 +98,21 @@ class PeriodicBoundaryPair:
 Domain: TypeAlias = Domain2D | Domain3D
 
 
+def periodic_boundary_pairs(domain: Domain) -> list[PeriodicBoundaryPair]:
+    """Opposite-face pairs of a periodic RVE: left/right and bottom/top in 2D; left/right,
+    front/back and bottom/top in 3D. ``source`` is the mirror face, ``target`` its image."""
+    if isinstance(domain, Domain2D):
+        return [
+            PeriodicBoundaryPair("x_periodic", "left", "right", (domain.width, 0.0)),
+            PeriodicBoundaryPair("y_periodic", "bottom", "top", (0.0, domain.height)),
+        ]
+    return [
+        PeriodicBoundaryPair("x_periodic", "left", "right", (domain.width, 0.0, 0.0)),
+        PeriodicBoundaryPair("y_periodic", "front", "back", (0.0, domain.height, 0.0)),
+        PeriodicBoundaryPair("z_periodic", "bottom", "top", (0.0, 0.0, domain.depth)),
+    ]
+
+
 @dataclass
 class GeometryModel:
     domain: Domain

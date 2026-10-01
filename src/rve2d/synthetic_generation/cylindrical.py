@@ -6,7 +6,7 @@ import numpy as np
 
 from rve2d.config import SyntheticGenerationConfig
 from rve2d.exceptions import RVEError
-from rve2d.models import CylinderFibre, Domain3D, GeometryModel, PeriodicBoundaryPair
+from rve2d.models import CylinderFibre, Domain3D, GeometryModel, periodic_boundary_pairs
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,7 @@ def generate_cylindrical_fibre_rve(config: SyntheticGenerationConfig) -> Synthet
             "bottom": 15,
             "top": 16,
         },
-        periodic_pairs=_periodic_pairs(domain) if config.periodic_compatible else [],
+        periodic_pairs=periodic_boundary_pairs(domain) if config.periodic_compatible else [],
         metadata={
             "generation_mode": "synthetic_3d",
             "dimension": 3,
@@ -145,26 +145,3 @@ def _is_non_overlapping(
         if delta_x * delta_x + delta_y * delta_y < min_distance_sq:
             return False
     return True
-
-
-def _periodic_pairs(domain: Domain3D) -> list[PeriodicBoundaryPair]:
-    return [
-        PeriodicBoundaryPair(
-            name="x_periodic",
-            source="left",
-            target="right",
-            translation=(domain.width, 0.0, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="y_periodic",
-            source="front",
-            target="back",
-            translation=(0.0, domain.height, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="z_periodic",
-            source="bottom",
-            target="top",
-            translation=(0.0, 0.0, domain.depth),
-        ),
-    ]

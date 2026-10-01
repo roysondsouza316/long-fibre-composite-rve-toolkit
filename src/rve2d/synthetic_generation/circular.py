@@ -6,7 +6,7 @@ import numpy as np
 
 from rve2d.config import SyntheticGenerationConfig
 from rve2d.exceptions import RVEError
-from rve2d.models import CircleFibre, Domain2D, GeometryModel, PeriodicBoundaryPair
+from rve2d.models import CircleFibre, Domain2D, GeometryModel, periodic_boundary_pairs
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def generate_circular_fibre_rve(config: SyntheticGenerationConfig) -> SyntheticP
             CircleFibre(center_x=x, center_y=y, radius=config.fibre_radius, fibre_id=index + 1)
             for index, (x, y) in enumerate(centres)
         ],
-        periodic_pairs=_periodic_pairs(domain) if config.periodic_compatible else [],
+        periodic_pairs=periodic_boundary_pairs(domain) if config.periodic_compatible else [],
         metadata={
             "generation_mode": "synthetic",
             "orientation_deg": config.orientation_deg,
@@ -85,20 +85,3 @@ def _is_non_overlapping(
         if delta_x * delta_x + delta_y * delta_y < min_distance_sq:
             return False
     return True
-
-
-def _periodic_pairs(domain: Domain2D) -> list[PeriodicBoundaryPair]:
-    return [
-        PeriodicBoundaryPair(
-            name="x_periodic",
-            source="left",
-            target="right",
-            translation=(domain.width, 0.0),
-        ),
-        PeriodicBoundaryPair(
-            name="y_periodic",
-            source="bottom",
-            target="top",
-            translation=(0.0, domain.height),
-        ),
-    ]
