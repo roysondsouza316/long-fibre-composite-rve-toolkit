@@ -38,7 +38,9 @@ def test_generate_circular_fibre_rve_from_sem_extracts_circle_measurements(tmp_p
         (round(fibre.center_x, 1), round(fibre.center_y, 1))
         for fibre in result.geometry.circular_fibres
     )
-    assert centers == [(44.0, 120.0), (104.0, 50.0)]
+    # Pixel (row, col) is centred on ((col + 0.5) * s, (rows - row - 0.5) * s): the disc
+    # centred on pixel (20, 22) of the 80 x 80 image lies at (45, 119) for s = 2.
+    assert centers == [(45.0, 119.0), (105.0, 49.0)]
 
 
 def test_generate_circular_fibre_rve_from_sem_separates_touching_fibres(tmp_path: Path) -> None:
