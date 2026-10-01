@@ -98,6 +98,13 @@ nonlinear:           # plasticity + cohesive interfaces
 or override both from the command line with `--engine julia`. The result files are the
 same whichever engine runs; the summary JSON records which one did.
 
+Which is faster depends on the job (4-core CPU): the Python engine with `pypardiso` is
+about 25 % faster for the nonlinear solve and for small linear problems (Julia spends
+about 4 s starting up), while the Julia engine is about 5× faster for large 3D linear
+homogenization (150,000 unknowns: 43 s against 208 s). Only the Python engine runs on a GPU.
+See the performance sections of [`docs/nonlinear.md`](docs/nonlinear.md#performance) and
+[`docs/homogenization.md`](docs/homogenization.md#performance).
+
 ---
 
 ## Quick start: pick your starting point

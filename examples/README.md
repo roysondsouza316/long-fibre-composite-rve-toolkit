@@ -52,9 +52,9 @@ Every solve runs on the Python engine unless the config sets `engine: julia` (in
 results. The Julia engine needs Julia 1.11+ (`rve2d doctor --setup-julia` prepares it).
 
 The nonlinear examples use mm / MPa / N/mm units. On a 4-core CPU with
-`pypardiso` installed, the 2D example solves in about 20 s and the 3D one in
-about 40 s with the Python engine (SciPy's SuperLU fallback is slower), and in
-about 30 s and 40 s with the Julia engine. See
+`pypardiso` installed, the 2D and 3D examples each solve in about 30 s with the
+Python engine (SciPy's SuperLU fallback is slower) and in about 40 s with the
+Julia engine. See
 [`docs/nonlinear.md`](../docs/nonlinear.md).
 
 `image_path` and `output_dir` in each config are relative to the directory

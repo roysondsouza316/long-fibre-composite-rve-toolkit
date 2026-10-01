@@ -141,26 +141,26 @@ of a finite penalty stiffness.
 ### Example runs
 
 `examples/2d/synthetic/nonlinear_cohesive_plastic.yaml` (9 glass fibres, Vf 0.40, epoxy
-matrix, transverse uniaxial tension to 2 %, 6,501 unknowns): initial modulus 7.88 GPa,
-peak 45.0 MPa at 0.70 % strain, then softening to 38.7 MPa with 24 % of the interface fully
-debonded and 13 % of the RVE yielded; 52 increments (one cut), 293 Newton iterations, 21 s
-on 4 CPU cores with PARDISO.
+matrix, transverse uniaxial tension to 2 %, 6,507 unknowns): initial modulus 7.88 GPa,
+peak 45.0 MPa at 0.70 % strain, then softening to 38.6 MPa with 23 % of the interface fully
+debonded and 13 % of the RVE yielded; 56 increments (three cuts), 331 Newton iterations,
+25 s on 4 CPU cores with PARDISO.
 
 Debonding robustness on the same RVE (40 initial increments):
 
 | Cohesive integration, `viscosity` | Outcome |
 |---|---|
-| gauss, 0 | stops at 0.82 % strain (increment cuts exhausted after the first debond) |
-| nodal, 0 (default) | completes; peak 45.0 MPa at 0.70 % |
-| nodal, 1e-4 | completes; peak 45.4 MPa at 0.74 % |
-| nodal, 1e-3 | completes; peak 46.8 MPa at 0.75 % |
+| gauss, 0 | completes, but needs 12 increment cuts after the first debond (87 increments); peak 45.2 MPa at 0.73 % (on an earlier mesh of this example it stopped at 0.82 % strain) |
+| nodal, 0 (default) | completes with 3 cuts (56 increments); peak 45.0 MPa at 0.70 % |
+| nodal, 1e-4 | completes (67 increments); peak 45.4 MPa at 0.73 % |
+| nodal, 1e-3 | completes (53 increments, 1 cut); peak 46.8 MPa at 0.75 % |
 
 A viscosity up to about 1e-4 regularises without visibly changing the response; larger
 values delay and raise the peak.
 
 `examples/3d/synthetic/nonlinear_cohesive_plastic.yaml` (3D solid, 776 cohesive triangles,
 4,961 unknowns, uniaxial stress to 1.2 %): initial modulus 6.86 GPa, peak 44.0 MPa at
-0.98 % strain; 27 increments, 137 Newton iterations, 37 s.
+0.98 % strain; 27 increments, 137 Newton iterations, 28 s.
 
 ## Julia engine
 
@@ -188,19 +188,38 @@ bundled environment (set up on first use; copied to `~/.cache/rve2d` first if th
 directory is read-only). Outputs and the summary JSON are the same as for the Python
 engine, plus the Julia log `nonlinear_log.txt`. `RVE2D_JULIA` selects the Julia executable
 and `RVE2D_JULIA_TIMEOUT` (seconds, default one day) bounds a run. The package precompiles
-a small workload, so a solve in a fresh process costs about 10 s more than in a warm
-session.
+its workload when the environment is set up; starting Julia and loading the engine still
+adds about 4 s to every run.
 
 Both engines take identical increments and Newton iterations on the examples:
 
-| Example | Increments / cuts / iterations | max abs(stress difference) / max stress | Runtime (Python with PARDISO / Julia) |
-|---|---|---|---|
-| 2D, `nonlinear_cohesive_plastic.yaml` | 52 / 1 / 293 (both) | 1.3e-14 | 21 s / 30 s (fresh process) |
-| 3D, `nonlinear_cohesive_plastic.yaml` | 27 / 1 / 137 (both) | 4.5e-15 | 37 s / 39 s (fresh process) |
+| Example | Increments / cuts / iterations | max abs(stress difference) / max stress |
+|---|---|---|
+| 2D, `nonlinear_cohesive_plastic.yaml` | 56 / 3 / 331 (both) | 1.3e-14 |
+| 3D, `nonlinear_cohesive_plastic.yaml` | 27 / 1 / 137 (both) | 6.3e-15 |
 
 Damage, debonded and yielded fractions, equivalent plastic strain and work density agree
-to 1e-15 as well; `tests/test_julia_nonlinear.py` checks the same parity on a structured
-mesh whenever the Julia environment is instantiated.
+to about 1e-14 as well; `tests/test_julia_nonlinear.py` checks the same parity on a
+structured mesh whenever the Julia environment is set up.
+
+## Performance
+
+Wall time of `rve2d solve-nonlinear` on the example meshes (median of two runs, 4-core
+Xeon at 2.1 GHz, CPU only). Every variant takes the same increments and Newton iterations
+and gives the same results; only the speed differs.
+
+| Example | Python + PARDISO | Julia | Python + SciPy | Python + TensorMesh |
+|---|---|---|---|---|
+| 2D (6,507 unknowns, 331 Newton iterations) | 28 s | 38 s | 40 s | 49 s |
+| 3D (4,961 unknowns, 137 Newton iterations) | 31 s | 41 s | 59 s | 97 s |
+
+- The Python engine evaluates all elements at once in PyTorch and factorizes with MKL
+  PARDISO (`pip install pypardiso`), both on all 4 cores; it is the fastest CPU option.
+- The Julia engine runs its own code on one thread (UMFPACK uses 2 BLAS threads) and
+  spends about 4 s starting up; 34 s of its 38 s in 2D are the solve itself.
+- `linear_solver: tensormesh` hands the factorization to SciPy on the CPU and adds
+  conversions, so it is the slowest CPU choice; it exists for `device: cuda`, where the
+  whole Newton loop stays on the GPU (not measured here).
 
 ## Limitations
 
