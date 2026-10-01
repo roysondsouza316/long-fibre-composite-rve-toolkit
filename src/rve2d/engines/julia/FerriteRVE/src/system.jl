@@ -1,5 +1,5 @@
 # Residual and consistent tangent of the RVE problem (Julia counterpart of
-# rve2d.engines.python.nonlinear.assembly / cohesive).
+# rve2d.engines.tensormesh.nonlinear.assembly / cohesive).
 #
 # Unknowns: reduced displacement fluctuations `w` and the stress-controlled macro strain
 # components `E_f`. Bulk strain `ε = sym(∇w) + E`; with `V` the RVE volume

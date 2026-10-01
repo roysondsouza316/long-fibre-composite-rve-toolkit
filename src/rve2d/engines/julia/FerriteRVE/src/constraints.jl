@@ -1,5 +1,5 @@
 # Fluctuation constraints: map every Ferrite DOF to an independent (reduced) unknown, or to 0
-# for a DOF fixed at zero (same rules as the Python rve2d.engines.python.constraints module).
+# for a DOF fixed at zero (same rules as the Python rve2d.engines.tensormesh.constraints module).
 #
 # periodic:  image-face nodes are tied to their mirror-face partners, matched per interface
 #            side, with edge and corner chains resolved to one master; one interior matrix node

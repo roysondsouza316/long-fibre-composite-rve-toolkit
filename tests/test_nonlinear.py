@@ -16,17 +16,17 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("diffcohesive")
 
 from rve2d.config import ConfigError, config_from_dict  # noqa: E402
-from rve2d.engines.python.constraints import build_dof_map  # noqa: E402
-from rve2d.engines.python.mesh import RVEMesh, insert_cohesive_interfaces  # noqa: E402
-from rve2d.engines.python.nonlinear.assembly import RVESystem  # noqa: E402
-from rve2d.engines.python.nonlinear.laws import build_traction_law  # noqa: E402
-from rve2d.engines.python.nonlinear.material import (  # noqa: E402
+from rve2d.engines.tensormesh.constraints import build_dof_map  # noqa: E402
+from rve2d.engines.tensormesh.mesh import RVEMesh, insert_cohesive_interfaces  # noqa: E402
+from rve2d.engines.tensormesh.nonlinear.assembly import RVESystem  # noqa: E402
+from rve2d.engines.tensormesh.nonlinear.laws import build_traction_law  # noqa: E402
+from rve2d.engines.tensormesh.nonlinear.material import (  # noqa: E402
     PlasticState,
     element_material,
     initial_state,
     j2_return_mapping,
 )
-from rve2d.engines.python.nonlinear.solver import (  # noqa: E402
+from rve2d.engines.tensormesh.nonlinear.solver import (  # noqa: E402
     LoadPath,
     NewtonSettings,
     initial_solver_state,
@@ -165,7 +165,7 @@ def test_interface_insertion_separates_phases_and_orients_normals(dim: int) -> N
     assert set(np.unique(top).tolist()) <= fibre_nodes
     # the square/prism fibre spans [0.3, 0.7]: every facet normal points towards its centre
     centre = np.full(dim, 0.5)
-    from rve2d.engines.python.mesh import _facet_normals
+    from rve2d.engines.tensormesh.mesh import _facet_normals
 
     normals = _facet_normals(mesh.points, bottom)
     to_centre = centre - mesh.points[bottom].mean(axis=1)
@@ -508,7 +508,7 @@ def test_elastic_nonlinear_solve_reproduces_the_linear_homogenization(
         ),
         mesh,
         tmp_path / "linear",
-        engine="python",
+        engine="tensormesh",
     )
     active = ACTIVE_VOIGT[kinematics]
     stiffness = np.zeros((6, 6))
@@ -516,7 +516,7 @@ def test_elastic_nonlinear_solve_reproduces_the_linear_homogenization(
     for component in ("xx", "xy"):
         section = {
             "enabled": True,
-            "engine": "python",
+            "engine": "tensormesh",
             "kinematics": kinematics,
             "boundary_condition": "periodic",
             "matrix": {"youngs_modulus": 3500.0, "poisson_ratio": 0.35},

@@ -25,14 +25,14 @@ from rve2d.engines.common.records import (
     write_response_csv,
     write_summary_json,
 )
-from rve2d.engines.python.constraints import build_dof_map
-from rve2d.engines.python.mesh import RVEMesh, build_rve_mesh
-from rve2d.engines.python.nonlinear import linear_solver
-from rve2d.engines.python.nonlinear.assembly import Evaluation, RVESystem
-from rve2d.engines.python.nonlinear.laws import build_traction_law
-from rve2d.engines.python.nonlinear.material import ElementMaterial, element_material
-from rve2d.engines.python.nonlinear.output import write_fields
-from rve2d.engines.python.nonlinear.solver import (
+from rve2d.engines.tensormesh.constraints import build_dof_map
+from rve2d.engines.tensormesh.mesh import RVEMesh, build_rve_mesh
+from rve2d.engines.tensormesh.nonlinear import linear_solver
+from rve2d.engines.tensormesh.nonlinear.assembly import Evaluation, RVESystem
+from rve2d.engines.tensormesh.nonlinear.laws import build_traction_law
+from rve2d.engines.tensormesh.nonlinear.material import ElementMaterial, element_material
+from rve2d.engines.tensormesh.nonlinear.output import write_fields
+from rve2d.engines.tensormesh.nonlinear.solver import (
     NewtonSettings,
     SolverState,
     initial_solver_state,
@@ -142,7 +142,7 @@ def run_nonlinear(
     response_path = write_response_csv(out_dir / "nonlinear_response.csv", outcome.records)
     response = response_summary(outcome.records, nl.load)
     summary: dict[str, Any] = {
-        "engine": "python",
+        "engine": "tensormesh",
         "dimension": mesh.dim,
         "kinematics": kinematics,
         "boundary_condition": nl.boundary_condition,

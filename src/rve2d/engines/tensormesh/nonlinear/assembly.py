@@ -20,14 +20,18 @@ from typing import Any
 import numpy as np
 import torch
 
-from rve2d.engines.python.constraints import DofMap
-from rve2d.engines.python.mesh import RVEMesh
-from rve2d.engines.python.nonlinear.cohesive import (
+from rve2d.engines.tensormesh.constraints import DofMap
+from rve2d.engines.tensormesh.mesh import RVEMesh
+from rve2d.engines.tensormesh.nonlinear.cohesive import (
     CohesiveGeometry,
     cohesive_geometry,
     evaluate_cohesive,
 )
-from rve2d.engines.python.nonlinear.material import ElementMaterial, PlasticState, j2_return_mapping
+from rve2d.engines.tensormesh.nonlinear.material import (
+    ElementMaterial,
+    PlasticState,
+    j2_return_mapping,
+)
 
 
 @dataclass(frozen=True)

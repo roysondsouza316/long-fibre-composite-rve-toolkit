@@ -59,7 +59,7 @@ def _fake_build_and_solve_rve(
         ),
         geometry_metadata={},
         homogenization_result=HomogenizationResult(
-            engine=engine or "python",
+            engine=engine or "tensormesh",
             kinematics="plane_stress",
             summary_path=summary_path,
             log_path=None,

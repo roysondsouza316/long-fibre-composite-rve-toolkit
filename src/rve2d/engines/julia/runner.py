@@ -44,7 +44,7 @@ def julia_executable() -> str:
     if not candidate:
         raise SolverError(
             "The Julia engine needs Julia 1.11 or newer on PATH (https://julialang.org/downloads"
-            "; or set RVE2D_JULIA to the executable). Use `engine: python` to solve without "
+            "; or set RVE2D_JULIA to the executable). Use `engine: tensormesh` to solve without "
             "Julia, or run `rve2d doctor` to check the setup."
         )
     return candidate

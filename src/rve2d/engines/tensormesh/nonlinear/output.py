@@ -9,9 +9,9 @@ import numpy as np
 import torch
 
 from rve2d.engines.common.records import COMPONENTS
-from rve2d.engines.python.nonlinear.assembly import Evaluation, RVESystem
-from rve2d.engines.python.nonlinear.material import von_mises
-from rve2d.engines.python.nonlinear.solver import SolverState
+from rve2d.engines.tensormesh.nonlinear.assembly import Evaluation, RVESystem
+from rve2d.engines.tensormesh.nonlinear.material import von_mises
+from rve2d.engines.tensormesh.nonlinear.solver import SolverState
 
 
 def total_displacement(system: RVESystem, state: SolverState) -> np.ndarray:

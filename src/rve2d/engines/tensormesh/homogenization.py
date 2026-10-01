@@ -20,8 +20,8 @@ import scipy.sparse.linalg
 
 from rve2d.engines.common.homogenization import EngineSolution, HomogenizationProblem
 from rve2d.engines.common.materials import ACTIVE_VOIGT, FloatArray
-from rve2d.engines.python.constraints import boundary_tolerance, build_dof_map
-from rve2d.engines.python.mesh import RVEMesh, build_rve_mesh
+from rve2d.engines.tensormesh.constraints import boundary_tolerance, build_dof_map
+from rve2d.engines.tensormesh.mesh import RVEMesh, build_rve_mesh
 from rve2d.exceptions import SolverError
 
 COMPONENTS = {"plane_stress": 2, "plane_strain": 2, "generalized_plane_strain": 3, "solid": 3}

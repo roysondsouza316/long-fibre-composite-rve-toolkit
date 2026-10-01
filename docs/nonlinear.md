@@ -16,7 +16,7 @@ The `nonlinear` config section runs a small-strain, rate-independent RVE analysi
 
 Two interchangeable engines implement the same formulation:
 
-- `engine: python` (default, `src/rve2d/engines/python/nonlinear/`): PyTorch, vectorised
+- `engine: python` (default, `src/rve2d/engines/tensormesh/nonlinear/`): PyTorch, vectorised
   over elements, with the traction-separation laws of diffcohesive; the sparse tangent is
   solved with PARDISO (if `pypardiso` is installed), SciPy's SuperLU, or TensorMesh's
   `SparseMatrix` / torch-sla (which also runs on CUDA with `device: cuda`).

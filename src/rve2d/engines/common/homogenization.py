@@ -1,6 +1,6 @@
 """Linear homogenization: engine-independent inputs and outputs.
 
-Both engines solve the same problem (see ``rve2d.engines.python.homogenization`` and the
+Both engines solve the same problem (see ``rve2d.engines.tensormesh.homogenization`` and the
 Julia ``FerriteRVE`` package) and return an :class:`EngineSolution`; this module prepares the
 phase stiffness matrices from the ``solver`` config section, derives engineering constants
 and writes the summary JSON and CSV files, so the outputs do not depend on the engine.

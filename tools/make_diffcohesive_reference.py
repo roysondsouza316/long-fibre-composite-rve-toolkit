@@ -20,7 +20,7 @@ import warnings
 import numpy as np
 import torch
 
-from rve2d.engines.python.nonlinear.laws import build_traction_law
+from rve2d.engines.tensormesh.nonlinear.laws import build_traction_law
 
 K, TN, TS, GIC, GIIC = 1.0e8, 50.0, 75.0, 0.002, 0.006
 ONSET = TN / K

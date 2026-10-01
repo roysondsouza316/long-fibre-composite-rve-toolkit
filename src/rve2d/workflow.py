@@ -38,7 +38,7 @@ def build_rve(
     output_dir: str | None = None,
     basename: str | None = None,
 ) -> BuildResult:
-    geometry, removed_artifacts = _build_geometry(config)
+    geometry, removed_artifacts = build_geometry(config)
     synthetic = config.synthetic if config.mode == "synthetic" else None
     quality_report = validate_geometry(
         geometry,
@@ -179,7 +179,9 @@ def load_geometry_metadata(mesh_path: str | Path) -> dict[str, object] | None:
     return metadata if isinstance(metadata, dict) else None
 
 
-def _build_geometry(config: RVEConfig) -> tuple[GeometryModel, int]:
+def build_geometry(config: RVEConfig) -> tuple[GeometryModel, int]:
+    """The geometry of the config (deterministic for a given seed) and the number of removed
+    noise specks (image modes)."""
     if config.mode == "synthetic":
         if config.synthetic is None:
             raise ConfigError("Synthetic mode requires a synthetic configuration.")

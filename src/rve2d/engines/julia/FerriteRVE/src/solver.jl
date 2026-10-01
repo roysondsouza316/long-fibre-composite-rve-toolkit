@@ -1,5 +1,5 @@
 # Incremental Newton solution under mixed macro control (Julia counterpart of
-# rve2d.engines.python.nonlinear.solver: same error measures, line search, increment
+# rve2d.engines.tensormesh.nonlinear.solver: same error measures, line search, increment
 # cutting and growth).
 
 """

@@ -32,9 +32,11 @@ def _gmsh_available() -> bool:
 @pytest.mark.skipif(not _gmsh_available(), reason="gmsh python module not available")
 def test_periodic_example_with_both_engines(tmp_path: Path) -> None:
     config = load_config(EXAMPLE)
-    build = build_and_solve_rve(config, output_dir=str(tmp_path), basename="rve", engine="python")
+    build = build_and_solve_rve(
+        config, output_dir=str(tmp_path), basename="rve", engine="tensormesh"
+    )
     result = build.homogenization_result
-    assert result is not None and result.engine == "python"
+    assert result is not None and result.engine == "tensormesh"
     stiffness = np.asarray(result.homogenized_stiffness)
     assert stiffness.shape == (3, 3)
     np.testing.assert_allclose(stiffness, stiffness.T, rtol=0, atol=1e-9 * stiffness.max())

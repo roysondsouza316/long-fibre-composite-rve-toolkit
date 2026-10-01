@@ -155,12 +155,20 @@ def _rotate_3d(stiffness: FloatArray, rotation_deg: tuple[float, float, float]) 
     """Stiffness in global axes for a material whose axes are rotated by ``rotation_deg``."""
     if max(abs(angle) for angle in rotation_deg) < 1e-12:
         return stiffness
-    t = _voigt_rotation(rotation_matrix(rotation_deg))
+    t = voigt_rotation(rotation_matrix(rotation_deg))
     # Engineering-shear Voigt: global stress = T_s sigma_local, local strain = T_s^T eps_global
     return np.asarray(t @ stiffness @ t.T)
 
 
-def _voigt_rotation(r: FloatArray) -> FloatArray:
+def rotate_stiffness(
+    stiffness: FloatArray, rotation_deg: tuple[float, float, float]
+) -> FloatArray:
+    """6x6 stiffness in global axes of a material whose axes are rotated by ``rotation_deg``
+    (degrees about x, y, z; ``Rz Ry Rx``)."""
+    return _rotate_3d(stiffness, rotation_deg)
+
+
+def voigt_rotation(r: FloatArray) -> FloatArray:
     """6x6 stress transformation ``sigma_global = T sigma_local`` for ``x_global = r x_local``
     (tensor shear stresses; the strain transformation with engineering shears is ``T^-T``)."""
     pairs = [(0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1)]

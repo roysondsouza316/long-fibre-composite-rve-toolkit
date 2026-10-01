@@ -5,7 +5,7 @@ $\bar{C}$ of the RVE in Voigt notation and the **engineering constants** derived
 Two engines implement the same formulation and write the same files:
 
 - `engine: python` (default): NumPy/SciPy, vectorised assembly and one sparse LU
-  factorization (`src/rve2d/engines/python/homogenization.py`);
+  factorization (`src/rve2d/engines/tensormesh/homogenization.py`);
 - `engine: julia`: Ferrite.jl `DofHandler`/`CellValues` assembly and one sparse Cholesky
   factorization (`FerriteRVE.homogenize` in
   `src/rve2d/engines/julia/FerriteRVE/src/homogenization.jl`).

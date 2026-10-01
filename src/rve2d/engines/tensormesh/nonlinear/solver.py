@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 import torch
 
 from rve2d.engines.common.records import LoadPath, StepRecord
-from rve2d.engines.python.nonlinear import linear_solver
-from rve2d.engines.python.nonlinear.assembly import Evaluation, RVESystem
-from rve2d.engines.python.nonlinear.material import PlasticState, initial_state
+from rve2d.engines.tensormesh.nonlinear import linear_solver
+from rve2d.engines.tensormesh.nonlinear.assembly import Evaluation, RVESystem
+from rve2d.engines.tensormesh.nonlinear.material import PlasticState, initial_state
 from rve2d.exceptions import SolverError
 
 

@@ -1,6 +1,6 @@
 # RVE mesh preparation: read the bulk simplex mesh and insert zero-thickness cohesive
 # elements on every fibre/matrix interface facet (same algorithm and ordering as the Python
-# rve2d.engines.python.mesh module).
+# rve2d.engines.tensormesh.mesh module).
 
 """
     RVEMesh{dim}

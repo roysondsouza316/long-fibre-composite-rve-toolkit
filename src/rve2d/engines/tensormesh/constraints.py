@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rve2d.engines.python.mesh import IntArray, RVEMesh
+from rve2d.engines.tensormesh.mesh import IntArray, RVEMesh
 from rve2d.exceptions import SolverError
 
 

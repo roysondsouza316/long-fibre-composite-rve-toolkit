@@ -44,7 +44,7 @@ dependencies = [
 [project.optional-dependencies]
 gmsh = ["gmsh>=4.12"]
 # Nonlinear RVE solve (J2 plasticity + cohesive interfaces). diffcohesive brings
-# tensormesh-fem and torch-sla; add `pypardiso` for faster sparse solves on x86 CPUs.
+# tensormesh-fem and torch-sla (sparse solvers, including cuDSS on GPUs).
 nonlinear = [
   "torch>=2.1",
   "diffcohesive>=0.1.2",
@@ -117,6 +117,5 @@ module = [
   "tensormesh.*",
   "torch_sla",
   "torch_sla.*",
-  "pypardiso",
 ]
 ignore_missing_imports = true

@@ -25,9 +25,9 @@ def run_checks(setup_julia: bool = False) -> list[Check]:
         _module("meshio", required=True),
         _module("gmsh", "meshing (pip install gmsh, plus libGLU on Linux)", required=True),
         _module("h5py", "XDMF export (the default mesh format)", required=True),
-        _module("torch", "Python engine, nonlinear solve (pip install '.[nonlinear]')"),
-        _module("diffcohesive", "Python engine, cohesive laws (pip install '.[nonlinear]')"),
-        _module("pypardiso", "optional: faster sparse solves on x86 CPUs"),
+        _module("torch", "TensorMesh engine, nonlinear solve (pip install '.[nonlinear]')"),
+        _module("diffcohesive", "TensorMesh engine, cohesive laws (pip install '.[nonlinear]')"),
+        _module("tensormesh", "TensorMesh engine, GPU sparse solves (pip install '.[nonlinear]')"),
     ]
     checks.extend(_julia_checks(setup_julia))
     return checks

@@ -58,7 +58,7 @@ def config(
     )
 
 
-def stiffness(cfg: RVEConfig, mesh: Path, out: Path, engine: str = "python") -> np.ndarray:
+def stiffness(cfg: RVEConfig, mesh: Path, out: Path, engine: str = "tensormesh") -> np.ndarray:
     result = solve_homogenization(cfg, mesh, out, engine=engine)
     assert result.engine == engine
     return np.asarray(result.homogenized_stiffness)
@@ -125,7 +125,8 @@ def test_effective_stiffness_respects_the_bounds(
 )
 def test_vtu_displacements_are_periodic(tmp_path: Path, dimension: int, kinematics: str) -> None:
     mesh = square_msh(tmp_path / "rve.msh") if dimension == 2 else cube_msh(tmp_path / "rve.msh")
-    result = solve_homogenization(config(dimension, kinematics), mesh, tmp_path, engine="python")
+    cfg = config(dimension, kinematics)
+    result = solve_homogenization(cfg, mesh, tmp_path, engine="tensormesh")
     assert result.vtk_path is not None
     assert_periodic_displacements(meshio.read(result.vtk_path), dimension)
 
@@ -162,10 +163,10 @@ def assert_periodic_displacements(vtu: meshio.Mesh, dimension: int) -> None:
 @pytest.mark.parametrize("kinematics", CASES_2D)
 def test_result_files_do_not_depend_on_the_engine(tmp_path: Path, kinematics: str) -> None:
     result = solve_homogenization(
-        config(2, kinematics), square_msh(tmp_path / "rve.msh"), tmp_path, engine="python"
+        config(2, kinematics), square_msh(tmp_path / "rve.msh"), tmp_path, engine="tensormesh"
     )
     summary = json.loads(result.summary_path.read_text())
-    assert summary["engine"] == "python" and summary["kinematics"] == kinematics
+    assert summary["engine"] == "tensormesh" and summary["kinematics"] == kinematics
     assert len(summary["homogenized_stiffness_voigt"]) == len(summary["voigt_components"])
     header = (tmp_path / "stress_strain_response.csv").read_text().splitlines()[0]
     expected = {
@@ -223,11 +224,11 @@ def test_julia_and_python_engines_agree(
 ) -> None:
     mesh = square_msh(tmp_path / "rve.msh") if dimension == 2 else cube_msh(tmp_path / "rve.msh")
     cfg = config(dimension, kinematics, bc)
-    python = solve_homogenization(cfg, mesh, tmp_path / "python", engine="python")
+    tensormesh = solve_homogenization(cfg, mesh, tmp_path / "tensormesh", engine="tensormesh")
     julia = solve_homogenization(cfg, mesh, tmp_path / "julia", engine="julia")
-    cp, cj = np.asarray(python.homogenized_stiffness), np.asarray(julia.homogenized_stiffness)
+    cp, cj = np.asarray(tensormesh.homogenized_stiffness), np.asarray(julia.homogenized_stiffness)
     np.testing.assert_allclose(cj, cp, rtol=0, atol=1e-10 * np.abs(cp).max())
-    summary_p = json.loads(python.summary_path.read_text())
+    summary_p = json.loads(tensormesh.summary_path.read_text())
     summary_j = json.loads(julia.summary_path.read_text())
     assert summary_j["fibre_volume_fraction"] == pytest.approx(summary_p["fibre_volume_fraction"])
     assert summary_j["anchor_node"] == summary_p["anchor_node"]
@@ -236,8 +237,8 @@ def test_julia_and_python_engines_agree(
     ):
         for face, traction in case_p.items():
             np.testing.assert_allclose(case_j[face], traction, atol=1e-9 * np.abs(cp).max())
-    assert python.vtk_path is not None and julia.vtk_path is not None
-    vtu_p, vtu_j = meshio.read(python.vtk_path), meshio.read(julia.vtk_path)
+    assert tensormesh.vtk_path is not None and julia.vtk_path is not None
+    vtu_p, vtu_j = meshio.read(tensormesh.vtk_path), meshio.read(julia.vtk_path)
     np.testing.assert_allclose(vtu_j.points, vtu_p.points)
     for name, values in vtu_p.point_data.items():
         np.testing.assert_allclose(vtu_j.point_data[name], values, atol=1e-9)

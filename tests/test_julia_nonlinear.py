@@ -2,7 +2,7 @@
 
 The input-file test needs neither Julia nor PyTorch. The end-to-end test runs when ``julia``
 is on PATH and the Julia engine environment has been set up (``rve2d doctor --setup-julia``);
-it compares the Julia and Python engines when PyTorch is installed too.
+it compares the Julia and TensorMesh engines when PyTorch is installed too.
 """
 
 from __future__ import annotations
@@ -134,23 +134,23 @@ def test_julia_engine_solves_plasticity_and_debonding(tmp_path: Path) -> None:
 
 
 @requires_julia
-def test_julia_engine_matches_python_engine(tmp_path: Path) -> None:
+def test_julia_engine_matches_tensormesh_engine(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("diffcohesive")
     from rve2d.workflow import solve_nonlinear
 
     mesh = structured_mesh(tmp_path / "rve.msh", n=12)
     config = nonlinear_config("julia")
-    python_config = dataclasses.replace(
-        config, nonlinear=dataclasses.replace(config.nonlinear, engine="python")
+    tm_config = dataclasses.replace(
+        config, nonlinear=dataclasses.replace(config.nonlinear, engine="tensormesh")
     )
     julia = solve_nonlinear(config, mesh, tmp_path / "julia")
-    python = solve_nonlinear(python_config, mesh, tmp_path / "python")
-    assert julia.completed and python.completed
-    assert [r.time for r in julia.records] == pytest.approx([r.time for r in python.records])
-    assert [r.iterations for r in julia.records] == [r.iterations for r in python.records]
-    stress_p = np.array([r.macro_stress for r in python.records])
+    tensormesh = solve_nonlinear(tm_config, mesh, tmp_path / "tensormesh")
+    assert julia.completed and tensormesh.completed
+    assert [r.time for r in julia.records] == pytest.approx([r.time for r in tensormesh.records])
+    assert [r.iterations for r in julia.records] == [r.iterations for r in tensormesh.records]
+    stress_p = np.array([r.macro_stress for r in tensormesh.records])
     stress_j = np.array([r.macro_stress for r in julia.records])
     assert np.abs(stress_p - stress_j).max() < 1e-9 * np.abs(stress_p).max()
-    damage_p = [r.mean_damage for r in python.records]
+    damage_p = [r.mean_damage for r in tensormesh.records]
     assert [r.mean_damage for r in julia.records] == pytest.approx(damage_p, abs=1e-10)

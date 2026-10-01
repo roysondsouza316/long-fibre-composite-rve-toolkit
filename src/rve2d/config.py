@@ -10,6 +10,19 @@ import yaml
 
 from rve2d.exceptions import ConfigError
 
+ENGINE_NAMES = ("tensormesh", "julia")
+# Older configs called the TensorMesh engine "python".
+ENGINE_ALIASES = {"python": "tensormesh"}
+LINEAR_SOLVERS = ("auto", "scipy", "tensormesh")
+
+
+def canonical_engine(name: str) -> str:
+    """The engine name for ``name`` (aliases resolved); ConfigError if unknown."""
+    engine = ENGINE_ALIASES.get(name, name)
+    if engine not in ENGINE_NAMES:
+        raise ConfigError(f"Unknown engine {name!r}; use 'tensormesh' or 'julia'.")
+    return engine
+
 
 @dataclass(frozen=True)
 class SyntheticGenerationConfig:
@@ -141,8 +154,9 @@ class ExportConfig:
 class SolverConfig:
     """Linear homogenization (the ``solver`` section): effective stiffness of the RVE.
 
-    ``engine`` selects the Python engine (NumPy/SciPy, no extra dependencies) or the Julia
-    engine (Ferrite.jl, needs Julia 1.11+); both give the same results. 2D kinematics:
+    ``engine`` selects the TensorMesh engine (Python: NumPy/SciPy for this solve, no extra
+    dependencies) or the Julia engine (Ferrite.jl, needs Julia 1.11+); both give the same
+    results. 2D kinematics:
     ``plane_stress`` (thin lamina), ``plane_strain`` (eps_zz = 0; gives plane-strain moduli)
     or ``generalized_plane_strain`` (cross-section of a unidirectional ply with fibres along
     z: all six strains, so the full 6x6 stiffness and true engineering constants); 3D:
@@ -150,7 +164,7 @@ class SolverConfig:
     """
 
     enabled: bool = False
-    engine: Literal["python", "julia"] = "python"
+    engine: Literal["tensormesh", "julia"] = "tensormesh"
     boundary_condition: Literal["dirichlet", "periodic"] = "dirichlet"
     kinematics: Literal["plane_strain", "plane_stress", "generalized_plane_strain", "solid"] = (
         "plane_strain"
@@ -241,7 +255,7 @@ class NonlinearSolveConfig:
     """Nonlinear RVE solve: J2 plasticity in both phases plus cohesive fibre/matrix interfaces."""
 
     enabled: bool = False
-    engine: Literal["python", "julia"] = "python"
+    engine: Literal["tensormesh", "julia"] = "tensormesh"
     kinematics: Literal["plane_strain", "generalized_plane_strain", "solid"] | None = None
     boundary_condition: Literal["periodic", "dirichlet"] = "periodic"
     matrix: PhaseMaterialConfig | None = None
@@ -249,7 +263,7 @@ class NonlinearSolveConfig:
     interface: CohesiveInterfaceConfig | None = None
     load: NonlinearLoadConfig = field(default_factory=NonlinearLoadConfig)
     device: str = "cpu"
-    linear_solver: Literal["auto", "scipy", "pardiso", "tensormesh"] = "auto"
+    linear_solver: Literal["auto", "scipy", "tensormesh"] = "auto"
     newton_max_iterations: int = 25
     newton_tolerance: float = 1.0e-8
     max_step_cuts: int = 10
@@ -264,6 +278,45 @@ class NonlinearSolveConfig:
 
 
 @dataclass(frozen=True)
+class LaminateTensileConfig:
+    """Strain-controlled coupon test of each laminate (stress, strain, elongation, force)."""
+
+    enabled: bool = True
+    direction: Literal["x", "y", "xy"] = "x"
+    max_strain: float = 0.02
+    steps: int = 200
+    gauge_length: float | None = None  # elongation = strain * gauge_length
+    width: float | None = None  # force = stress * laminate thickness * width
+
+
+@dataclass(frozen=True)
+class LaminateConfig:
+    """Laminates of plies made of the RVE microstructure (``rve2d laminate``).
+
+    The ply stiffness comes from the linear homogenization (``solver`` section, kinematics
+    ``generalized_plane_strain`` in 2D or ``solid`` in 3D); for the tensile test the ply's
+    transverse and in-plane shear curves come from nonlinear RVE solves (``nonlinear``
+    section; a 2D RVE is extruded into a thin 3D slab for the shear curve). Fibre failure is
+    not part of the RVE model: the longitudinal strengths are inputs. Use the same units in
+    every section (e.g. mm and MPa).
+    """
+
+    enabled: bool = False
+    ply_thickness: float = 0.125
+    stacking_sequences: list[Any] = field(default_factory=lambda: ["[0/90]s"])
+    transversely_isotropic: bool = True
+    longitudinal_tensile_strength: float | None = None
+    longitudinal_compressive_strength: float | None = None
+    ply_curves: bool = True
+    transverse_compression_curve: bool = False
+    transverse_max_strain: float = 0.03
+    shear_max_strain: float = 0.06
+    curve_steps: int = 60
+    shear_slab_depth: float | None = None
+    tensile_test: LaminateTensileConfig = field(default_factory=LaminateTensileConfig)
+
+
+@dataclass(frozen=True)
 class RVEConfig:
     mode: Literal["synthetic", "image", "sem_to_synthetic"]
     dimension: Literal[2, 3] = 2
@@ -274,6 +327,7 @@ class RVEConfig:
     export: ExportConfig = field(default_factory=ExportConfig)
     solver: SolverConfig = field(default_factory=SolverConfig)
     nonlinear: NonlinearSolveConfig = field(default_factory=NonlinearSolveConfig)
+    laminate: LaminateConfig = field(default_factory=LaminateConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -315,8 +369,9 @@ def config_from_dict(payload: dict[str, Any]) -> RVEConfig:
         ),
         mesh=_section(MeshConfig, payload.get("mesh", {}), "mesh"),
         export=_section(ExportConfig, payload.get("export", {}), "export"),
-        solver=_section(SolverConfig, payload.get("solver", {}), "solver"),
+        solver=_section(SolverConfig, _engine_alias(payload.get("solver", {})), "solver"),
         nonlinear=_nonlinear_from_dict(payload.get("nonlinear")),
+        laminate=_laminate_from_dict(payload.get("laminate")),
     )
     _validate_config(config)
     return config
@@ -359,6 +414,7 @@ def _validate_config(config: RVEConfig) -> None:
         raise ConfigError("At least one export format must be configured.")
     _validate_solver(config)
     _validate_nonlinear(config)
+    _validate_laminate(config)
 
 
 def _validate_synthetic(config: SyntheticGenerationConfig, dimension: int) -> None:
@@ -462,8 +518,8 @@ def geometry_is_periodic(config: RVEConfig) -> bool:
 
 def _validate_solver(config: RVEConfig) -> None:
     solver = config.solver
-    if solver.engine not in ("python", "julia"):
-        raise ConfigError("solver.engine must be 'python' or 'julia'.")
+    if solver.engine not in ENGINE_NAMES:
+        raise ConfigError("solver.engine must be 'tensormesh' or 'julia'.")
     if solver.matrix_youngs_modulus <= 0.0 or solver.fibre_youngs_modulus <= 0.0:
         raise ConfigError("Solver Young's moduli must be positive.")
     for poisson in (solver.matrix_poisson_ratio, solver.fibre_poisson_ratio):
@@ -608,12 +664,79 @@ def _section(cls: Any, payload: Any, name: str) -> Any:
         raise ConfigError(f"Invalid '{name}' section: {exc}") from exc
 
 
+def _engine_alias(payload: Any) -> Any:
+    """A copy of a section payload with an engine alias ("python") replaced by its name."""
+    if isinstance(payload, dict) and isinstance(payload.get("engine"), str):
+        return {**payload, "engine": ENGINE_ALIASES.get(payload["engine"], payload["engine"])}
+    return payload
+
+
+def _laminate_from_dict(payload: Any) -> LaminateConfig:
+    if payload is None:
+        return LaminateConfig()
+    if not isinstance(payload, dict):
+        raise ConfigError("Config section 'laminate' must be a mapping.")
+    data = dict(payload)
+    if data.get("tensile_test") is not None:
+        data["tensile_test"] = _section(
+            LaminateTensileConfig, data["tensile_test"], "laminate.tensile_test"
+        )
+    if isinstance(data.get("stacking_sequences"), str):
+        data["stacking_sequences"] = [data["stacking_sequences"]]
+    return cast(LaminateConfig, _section(LaminateConfig, data, "laminate"))
+
+
+def _validate_laminate(config: RVEConfig) -> None:
+    lam = config.laminate
+    if not lam.enabled:
+        return
+    from rve2d.laminate.stacking import parse_stacking_sequence  # (avoids an import cycle)
+
+    if lam.ply_thickness <= 0.0:
+        raise ConfigError("laminate.ply_thickness must be positive.")
+    if not lam.stacking_sequences:
+        raise ConfigError("laminate.stacking_sequences needs at least one sequence.")
+    for sequence in lam.stacking_sequences:
+        parse_stacking_sequence(sequence)
+    for name in ("longitudinal_tensile_strength", "longitudinal_compressive_strength"):
+        value = getattr(lam, name)
+        if value is not None and value <= 0.0:
+            raise ConfigError(f"laminate.{name} must be positive.")
+    if min(lam.transverse_max_strain, lam.shear_max_strain) <= 0.0 or lam.curve_steps < 1:
+        raise ConfigError("laminate curve strains must be positive and curve_steps at least 1.")
+    if lam.shear_slab_depth is not None and lam.shear_slab_depth <= 0.0:
+        raise ConfigError("laminate.shear_slab_depth must be positive.")
+    test = lam.tensile_test
+    if test.direction not in ("x", "y", "xy"):
+        raise ConfigError("laminate.tensile_test.direction must be x, y or xy.")
+    if test.max_strain == 0.0 or test.steps < 1:
+        raise ConfigError("laminate.tensile_test needs a non-zero max_strain and steps >= 1.")
+    for name in ("gauge_length", "width"):
+        value = getattr(test, name)
+        if value is not None and value <= 0.0:
+            raise ConfigError(f"laminate.tensile_test.{name} must be positive.")
+    if not config.solver.enabled:
+        raise ConfigError(
+            "The laminate pipeline needs the solver section (enabled: true) for the ply stiffness."
+        )
+    if config.solver.kinematics not in ("generalized_plane_strain", "solid"):
+        raise ConfigError(
+            "The laminate pipeline needs the full 6x6 ply stiffness: use solver.kinematics "
+            "generalized_plane_strain (2D) or solid (3D)."
+        )
+    if test.enabled and lam.ply_curves and not config.nonlinear.enabled:
+        raise ConfigError(
+            "The laminate tensile test takes the ply curves from the nonlinear section: enable "
+            "it, or set laminate.ply_curves: false for elastic plies (fibre failure only)."
+        )
+
+
 def _nonlinear_from_dict(payload: Any) -> NonlinearSolveConfig:
     if payload is None:
         return NonlinearSolveConfig()
     if not isinstance(payload, dict):
         raise ConfigError("Config section 'nonlinear' must be a mapping.")
-    data = dict(payload)
+    data = _engine_alias(payload)
     for key, cls in (("matrix", PhaseMaterialConfig), ("fibre", PhaseMaterialConfig)):
         if data.get(key) is not None:
             data[key] = _section(cls, data[key], f"nonlinear.{key}")
@@ -648,6 +771,18 @@ NONLINEAR_ACTIVE_COMPONENTS = {
 
 def _validate_nonlinear(config: RVEConfig) -> None:
     nl = config.nonlinear
+    if nl.engine not in ENGINE_NAMES:
+        raise ConfigError("nonlinear.engine must be 'tensormesh' or 'julia'.")
+    if nl.linear_solver not in LINEAR_SOLVERS:
+        removed = (
+            " PARDISO (Intel MKL) is not supported: it only exists for x86-64 Linux and "
+            "Windows."
+            if str(nl.linear_solver) == "pardiso"
+            else ""
+        )
+        raise ConfigError(
+            f"nonlinear.linear_solver must be one of {', '.join(LINEAR_SOLVERS)}.{removed}"
+        )
     if not nl.enabled:
         return
     kinematics = nl.resolved_kinematics(config.dimension)
@@ -733,7 +868,5 @@ def _validate_nonlinear(config: RVEConfig) -> None:
         raise ConfigError("nonlinear Newton settings must be positive.")
     if not (nl.device == "cpu" or nl.device.startswith("cuda")):
         raise ConfigError("nonlinear.device must be 'cpu' or 'cuda[:index]'.")
-    if nl.engine not in ("python", "julia"):
-        raise ConfigError("nonlinear.engine must be 'python' or 'julia'.")
     if nl.engine == "julia" and nl.device != "cpu":
         raise ConfigError("The Julia engine runs on the CPU (nonlinear.device: cpu).")

@@ -14,7 +14,7 @@ The Julia engine of rve2d: RVE solvers on [Ferrite.jl](https://ferrite-fem.githu
   with mixed macro strain/stress control, for 2D plane strain, 2D generalized plane strain
   and 3D solids.
 
-It is the counterpart of the Python engine (`rve2d.engines.python`): same constraints,
+It is the counterpart of the Python engine (`rve2d.engines.tensormesh`): same constraints,
 interface insertion, Newton strategy and output files. Both engines agree to round-off:
 the linear effective stiffness to about 1e-16 and, on the nonlinear examples, identical
 increments and Newton iterations with macro stresses equal to 1e-14.

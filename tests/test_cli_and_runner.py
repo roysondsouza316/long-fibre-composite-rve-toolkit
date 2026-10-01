@@ -57,7 +57,7 @@ def test_cli_solve_writes_the_summary(tmp_path: Path, capsys: CaptureFixture[str
     config.write_text(CONFIG, encoding="utf-8")
     mesh = square_msh(tmp_path / "rve.msh")
     assert main(["solve", str(config), str(mesh), "--output-dir", str(tmp_path / "out")]) == 0
-    assert '"engine": "python"' in capsys.readouterr().out
+    assert '"engine": "tensormesh"' in capsys.readouterr().out
     assert (tmp_path / "out" / "homogenization_summary.json").exists()
 
 
@@ -105,5 +105,26 @@ def test_missing_julia_is_reported(monkeypatch: MonkeyPatch) -> None:
 
     monkeypatch.setenv("RVE2D_JULIA", "")
     monkeypatch.setattr(runner.shutil, "which", lambda name: None)
-    with pytest.raises(SolverError, match="engine: python"):
+    with pytest.raises(SolverError, match="engine: tensormesh"):
         runner.julia_executable()
+
+
+def test_engine_names_and_removed_options() -> None:
+    from rve2d.config import ConfigError, config_from_dict
+
+    base = {
+        "mode": "synthetic",
+        "synthetic": {
+            "domain_width": 1.0,
+            "domain_height": 1.0,
+            "fibre_radius": 0.1,
+            "target_volume_fraction": 0.1,
+            "periodic_compatible": True,
+        },
+    }
+    legacy = config_from_dict(base | {"solver": {"enabled": True, "engine": "python"}})
+    assert legacy.solver.engine == "tensormesh"  # older configs keep working
+    with pytest.raises(ConfigError, match="tensormesh"):
+        config_from_dict(base | {"solver": {"enabled": True, "engine": "fortran"}})
+    with pytest.raises(ConfigError, match="PARDISO"):
+        config_from_dict(base | {"nonlinear": {"linear_solver": "pardiso"}})

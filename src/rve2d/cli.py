@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from rve2d.config import load_config
+from rve2d.config import ENGINE_ALIASES, load_config
 from rve2d.engines import ENGINES, HomogenizationResult, NonlinearResult
 from rve2d.exceptions import RVEError
 
@@ -87,6 +87,23 @@ def _parser() -> argparse.ArgumentParser:
     )
     _engine_argument(batch_parser)
 
+    laminate_parser = subparsers.add_parser(
+        "laminate",
+        help=(
+            "Laminate pipeline: RVE -> ply properties -> stiffness and tensile test of each "
+            "stacking sequence (laminate section)."
+        ),
+    )
+    laminate_parser.add_argument("config_path", type=Path)
+    laminate_parser.add_argument("--output-dir", type=Path, default=None)
+    laminate_parser.add_argument(
+        "--ply",
+        type=Path,
+        default=None,
+        help="Reuse ply_properties.json of an earlier run (skips the RVE solves).",
+    )
+    _engine_argument(laminate_parser)
+
     doctor_parser = subparsers.add_parser(
         "doctor", help="Check the installation (gmsh, h5py, PyTorch, Julia engine)."
     )
@@ -107,9 +124,12 @@ def _solve_arguments(parser: argparse.ArgumentParser) -> None:
 def _engine_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--engine",
-        choices=ENGINES,
+        choices=(*ENGINES, *ENGINE_ALIASES),
         default=None,
-        help="Override the engine set in the config (solver.engine / nonlinear.engine).",
+        help=(
+            "Override the engine set in the config (solver.engine / nonlinear.engine): "
+            "tensormesh or julia."
+        ),
     )
 
 
@@ -153,6 +173,12 @@ def _run(args: argparse.Namespace) -> int:
         return 0 if all(case.status == "ok" for case in cases) else 1
 
     config = load_config(args.config_path)
+    if args.command == "laminate":
+        from rve2d.laminate.pipeline import run_laminate_pipeline
+
+        pipeline = run_laminate_pipeline(config, args.output_dir, args.engine, args.ply)
+        _print(json.loads(pipeline.summary_json.read_text(encoding="utf-8")))
+        return 0
     if args.command == "validate-config":
         _print(config.to_dict())
         return 0
