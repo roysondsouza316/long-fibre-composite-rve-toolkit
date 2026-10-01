@@ -22,8 +22,8 @@ without a sign as strings).
 
 ## `synthetic`
 
-Random-placement circular (2D) or cylindrical (3D) fibres in a rectangular /
-box domain.
+Randomly placed circular (2D) or cylindrical (3D, along z) fibres of equal radius in a
+rectangular / box domain.
 
 | Field                               | Type     | Default  | Notes                                                            |
 | ----------------------------------- | -------- | -------- | ---------------------------------------------------------------- |
@@ -34,34 +34,52 @@ box domain.
 | `target_volume_fraction`            | float    | required | In `(0, 1)`. Used when `fibre_count` is unset                    |
 | `fibre_count`                       | int?     | `None`   | Overrides `target_volume_fraction` when set                      |
 | `min_spacing`                       | float    | `0.0`    | Minimum gap between fibre surfaces                               |
-| `edge_clearance`                    | float    | `0.0`    | Minimum gap between fibre and domain edge                        |
+| `edge_clearance`                    | float    | `0.0`    | Minimum gap between fibre and domain edge (ignored with `periodic_wrapping`) |
 | `random_seed`                       | int      | `0`      | RNG seed for reproducibility                                     |
 | `max_attempts`                      | int      | `100000` | Random-placement attempt cap                                     |
 | `periodic_compatible`               | bool     | `false`  | Emit periodic boundary metadata + node-matched mesh              |
+| `packing_algorithm`                 | enum     | `random_sequential` | `random_sequential` (one fibre at a time, reproduces earlier layouts; saturates near Vf 0.45-0.5) or `relaxation` (push overlapping fibres apart, then Monte Carlo shaking; Vf 0.60-0.65 and above; needs `min_spacing > 0`) |
+| `periodic_wrapping`                 | bool     | `false`  | Fibres may cross the domain boundary and are stored with their periodic images; needs `periodic_compatible: true` |
+| `boundary_clearance`                | float?   | `None`   | Minimum distance between a fibre surface and a face/corner it does not cross (or the minimum crossing depth); default `max(min_spacing, 0.1 r)` for the new modes; about one mesh element avoids slivers |
+| `max_relaxation_iterations`         | int      | `20000`  | Iteration cap of the relaxation packing                          |
+| `shake_sweeps`                      | int      | `20`     | Monte Carlo sweeps after relaxation (0 disables them)            |
 | `orientation_deg` *(2D)*            | float    | `0.0`    | Fibre material angle about z, recorded in the geometry metadata; the solve uses it when no fibre angle is set in `solver` |
 | `matrix_orientation_angle_*_deg`    | float?   | `None`   | 3D matrix rotation, passed to the solve via the geometry metadata |
 | `fibre_orientation_angle_*_deg`     | float?   | `None`   | 3D fibre rotation, passed to the solve via the geometry metadata  |
+
+For fibre volume fractions above about 0.45, use `packing_algorithm: relaxation` (and, for
+periodic RVEs, `periodic_wrapping: true`, which removes the matrix-only band along the
+edges); see `examples/{2d,3d}/synthetic/high_vf_periodic.yaml`. Fibre positions do not
+depend on the mesh settings; when `min_spacing` or `boundary_clearance` is smaller than
+`mesh.element_size_min`, the quality report notes that the mesh will contain slivers.
 
 ---
 
 ## `image`
 
-Binary segmented mask → 2D polygons or 3D extruded volumes.
+Segmented image (fibres light, or dark with `invert: true`) → 2D polygons or 3D extruded
+volumes.
 
 | Field                  | Type     | Default | Notes                                                           |
 | ---------------------- | -------- | ------- | --------------------------------------------------------------- |
-| `image_path`           | string   | req.    | Path readable by `skimage.io.imread`                            |
+| `image_path`           | string   | req.    | Any image `skimage.io.imread` reads: 8/16-bit grey, boolean, float in [0, 1], RGB(A) |
 | `pixel_size`           | float    | `1.0`   | Physical edge length of one pixel                               |
 | `extrusion_depth`      | float    | `None`  | Required for 3D                                                 |
-| `threshold`            | float    | `0.5`   | Foreground threshold on grayscale image                         |
+| `threshold`            | float    | `0.5`   | Foreground = grey level above this, on a 0-1 scale whatever the image format |
 | `invert`               | bool     | `false` | Treat dark pixels as foreground when true                       |
-| `min_artifact_area_px` | int      | `16`    | Drop connected components smaller than this                     |
+| `min_artifact_area_px` | int      | `16`    | Drop connected components smaller than this (reported as `removed_artifacts`) |
 | `clear_border`         | bool     | `false` | Remove regions touching the image border                        |
-| `simplify_tolerance`   | float    | `1.0`   | Polygon simplification tolerance, in pixels                     |
-| `domain_width`         | float?   | `None`  | Override derived domain width                                   |
-| `domain_height`        | float?   | `None`  | Override derived domain height                                  |
+| `simplify_tolerance`   | float    | `1.0`   | Polygon simplification tolerance, in pixels (vertices on the domain boundary are kept) |
+| `domain_width`         | float?   | `None`  | Domain width; default the image width. Smaller crops the image   |
+| `domain_height`        | float?   | `None`  | Domain height; default the image height. Smaller crops the image |
 | `periodic_compatible`  | bool     | `false` | Emit periodic boundary metadata                                 |
 | `matrix/fibre_orientation_angle_*_deg` | float? | `None` | Per-phase rotations passed to the solve via the geometry metadata |
+
+Images are read as grey levels in [0, 1] (colour images by luminance, alpha ignored;
+integer images with only 0 and 1 are binary masks). Pixel `(row, col)` covers
+`[col s, (col+1) s] x [(rows-row-1) s, (rows-row) s]` with `s = pixel_size`: x to the right,
+y up, origin at the bottom-left corner. Fibres cut by the image border end exactly on the
+domain boundary, and fibres outside a cropped domain are dropped.
 
 ---
 
@@ -98,7 +116,10 @@ list and validation rules):
 
 `elements_per_circle > 0` refines the mesh along curved fibre boundaries
 (gmsh `Mesh.MeshSizeFromCurvature`), still bounded by `element_size_min`/`max`.
-Useful for cohesive interfaces, which need a well-resolved fibre perimeter.
+Useful for cohesive interfaces, which need a well-resolved fibre perimeter, and
+whenever the meshed fibre volume fraction should match the nominal one: circles are
+meshed as polygons, so a coarse mesh loses fibre area. The linear homogenization reports
+the meshed fraction (`fibre_volume_fraction` in `homogenization_summary.json`).
 
 ---
 

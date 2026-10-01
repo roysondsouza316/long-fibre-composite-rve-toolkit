@@ -31,15 +31,18 @@ post-processing exports.
 
 | Input mode         | Description                                                              | 2D | 3D |
 | ------------------ | ------------------------------------------------------------------------ | -- | -- |
-| `synthetic`        | Random circular (2D) / cylindrical (3D) fibres in a rectangle / box      | ✅ | ✅ |
-| `image`            | Binary segmented mask → polygonal fibres (2D) or extruded volumes (3D)   | ✅ | ✅ |
+| `synthetic`        | Random circular (2D) / cylindrical (3D) fibres in a rectangle / box; fibre volume fractions up to about 0.65 with the relaxation packing | ✅ | ✅ |
+| `image`            | Segmented image (any bit depth, grey or colour) → polygonal fibres (2D) or extruded volumes (3D) | ✅ | ✅ |
 | `sem_to_synthetic` | Raw SEM micrograph → segment + fit circles/ellipses → clean RVE          | ✅ | —  |
 
 Pipeline stages:
 
-1. **Geometry**: synthetic generator, mask importer, or SEM extractor
-2. **Quality validation**: spacing, clipping, disconnected-region checks
-3. **Meshing**: gmsh OpenCASCADE Boolean cuts, periodic node matching
+1. **Geometry**: synthetic generator (random sequential or relaxation packing, optional
+   periodic wrapping), mask importer, or SEM extractor
+2. **Quality validation**: spacing (periodic minimum-image distances), clipped, wrapped and
+   outside fibres, gaps thinner than the mesh size
+3. **Meshing**: gmsh OpenCASCADE fragments (conforming fibre/matrix interfaces, fibres
+   clipped to the domain), periodic node matching
 4. **Export**: `.msh`, `.xdmf` (or any meshio format), JSON metadata bundle
 5. **Linear homogenization** (optional, `solver` section): effective stiffness,
    engineering constants, stress–strain and traction CSVs, `.vtu` fields for ParaView
@@ -136,13 +139,16 @@ rve2d build           examples/3d/image/extruded.yaml
 #    (drop your own image at examples/2d/sem/sem_sample.png first)
 rve2d build           examples/2d/sem/to_synthetic.yaml
 
-# 7. Run a batch study and collect the engineering constants of every case
+# 7. A periodic RVE at fibre volume fraction 0.60 (relaxation packing, periodic wrapping)
+rve2d build-and-solve examples/2d/synthetic/high_vf_periodic.yaml
+
+# 8. Run a batch study and collect the engineering constants of every case
 rve2d batch-study \
   examples/2d/synthetic/periodic_solve.yaml \
   examples/2d/image/basic_solve.yaml \
   --output-dir outputs/batch_demo
 
-# 8. Nonlinear RVE: matrix plasticity + fibre/matrix debonding
+# 9. Nonlinear RVE: matrix plasticity + fibre/matrix debonding
 rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml
 rve2d build-and-solve examples/3d/synthetic/nonlinear_cohesive_plastic.yaml --engine julia
 ```
@@ -174,7 +180,10 @@ shows the full Python traceback instead.
 - mesh files (`.msh`, `.xdmf`, …)
 - `geometry_summary.json`
 - `phase_tags.json`
-- `quality_report.json`
+- `quality_report.json`: `valid` plus the defects behind it (fibres closer than
+  `min_spacing`, fibres cut by the boundary that are not complete periodic wraps) and
+  informational counts and notes (removed specks, wrapped and outside fibres, gaps
+  thinner than the mesh size)
 - `periodic_pairs.json` (when periodic metadata is enabled)
 
 `solve` and `build-and-solve` (when `solver.enabled: true`) write:
@@ -364,7 +373,6 @@ julia --project=src/rve2d/engines/julia/FerriteRVE   -e 'using Pkg; Pkg.instanti
 - elliptical and polygonal fibre cross-sections in synthetic mode
 - waviness and tow-scale path generation
 - graded or multi-material matrix regions
-- denser periodic packing and edge-wrapping inclusions
 - direct export helpers for additional FEM solvers
 - true volumetric 3D reconstruction from serial-section / micro-CT slice stacks
 - richer 3D orientation input from segmentation metadata

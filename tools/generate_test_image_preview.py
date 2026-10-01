@@ -7,14 +7,17 @@ import numpy as np
 from scipy import ndimage
 from skimage import measure
 from skimage.filters import gaussian
-from skimage.io import imread, imsave
+from skimage.io import imsave
 
 from rve2d.config import load_config
 from rve2d.image_import.mask_to_geometry import import_mask_geometry
+from rve2d.image_import.raster import load_grayscale_image
 
 
 def main() -> int:
-    image = imread("examples/2d/sem/sem_sample.png", as_gray=True)
+    # grey levels in [0, 1] whatever the bit depth (imread(as_gray=True) keeps 8-bit grey
+    # images on 0..255, where the threshold below would select everything)
+    image = load_grayscale_image("examples/2d/sem/sem_sample.png")
     smoothed = gaussian(image, sigma=2.0, preserve_range=True)
     mask = smoothed > 0.42
     mask = ndimage.binary_fill_holes(mask)

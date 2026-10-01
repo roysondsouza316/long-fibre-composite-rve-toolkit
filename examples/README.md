@@ -22,12 +22,14 @@ examples/
 | Quick 2D smoke test                              | `2d/synthetic/basic.yaml`                           |
 | 2D periodic homogenization                       | `2d/synthetic/periodic_solve.yaml`                  |
 | 2D rotated orthotropic phase materials           | `2d/synthetic/orthotropic_solve.yaml`               |
+| 2D periodic RVE at Vf 0.60 (relaxation packing)  | `2d/synthetic/high_vf_periodic.yaml`                |
 | Build 2D RVE from a binary mask                  | `2d/image/basic_solve.yaml`                         |
 | Same with rotated orthotropic phase materials    | `2d/image/oriented_solve.yaml`                      |
 | Convert a raw SEM image into circular fibres     | `2d/sem/to_synthetic.yaml`                          |
 | Just import the SEM micrograph as polygons       | `2d/sem/import.yaml`                                |
 | 3D smoke test                                    | `3d/synthetic/basic.yaml`                           |
 | 3D periodic homogenization (solid)               | `3d/synthetic/periodic_solve.yaml`                  |
+| 3D periodic RVE at Vf 0.60 (relaxation packing)  | `3d/synthetic/high_vf_periodic.yaml`                |
 | 3D rotated orthotropic phases (explicit angles)  | `3d/synthetic/orthotropic_solve.yaml`               |
 | 3D rotated orthotropic phases (workflow angles)  | `3d/synthetic/workflow_oriented_solve.yaml`         |
 | 3D RVE from an extruded 2D mask                  | `3d/image/extruded.yaml`                            |
