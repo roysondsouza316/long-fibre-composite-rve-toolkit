@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -194,6 +195,7 @@ class NonlinearSolveConfig:
     """Nonlinear RVE solve: J2 plasticity in both phases plus cohesive fibre/matrix interfaces."""
 
     enabled: bool = False
+    backend: Literal["python", "julia"] = "python"
     kinematics: Literal["plane_strain", "generalized_plane_strain", "solid"] | None = None
     boundary_condition: Literal["periodic", "dirichlet"] = "periodic"
     matrix: PhaseMaterialConfig | None = None
@@ -569,11 +571,20 @@ def _nonlinear_from_dict(payload: Any) -> NonlinearSolveConfig:
     return cast(NonlinearSolveConfig, _section(NonlinearSolveConfig, data, "nonlinear"))
 
 
+_MIN_TOUGHNESS_FACTOR = {
+    "bilinear_mixed_mode": 0.5,
+    "bilinear": 0.5,
+    "linear-parabolic": 0.125,
+    "exponential": math.e**2 - 2.0 * math.e,
+    "trapezoidal": 1.0 - 1e-12,
+}
+
+
 def _default(value: float | None, default: float) -> float:
     return default if value is None else value
 
 
-_ACTIVE_COMPONENTS = {
+NONLINEAR_ACTIVE_COMPONENTS = {
     "plane_strain": ("xx", "yy", "xy"),
     "generalized_plane_strain": ("xx", "yy", "zz", "xy"),
     "solid": ("xx", "yy", "zz", "yz", "xz", "xy"),
@@ -647,18 +658,19 @@ def _validate_nonlinear(config: RVEConfig) -> None:
             raise ConfigError(
                 "nonlinear.interface.viscosity is available for law: bilinear_mixed_mode only."
             )
+        # Smallest toughness (in units of strength^2 / K) for which the envelope exists.
+        factor = _MIN_TOUGHNESS_FACTOR[interface.law]
         for strength, toughness, k, label in pairs:
             if min(strength, toughness, k) <= 0.0:
                 raise ConfigError(
                     f"nonlinear.interface {label}: strength, toughness and stiffness must be "
                     "positive."
                 )
-            if toughness <= strength**2 / (2.0 * k):
+            if toughness <= factor * strength**2 / k:
                 raise ConfigError(
                     f"nonlinear.interface {label}: toughness {toughness:g} must exceed "
-                    f"strength^2 / (2 K) = {strength**2 / (2.0 * k):g} "
-                    "(otherwise the final opening "
-                    "precedes damage onset)."
+                    f"{factor:.4g} strength^2 / K = {factor * strength**2 / k:g} for the "
+                    f"{interface.law} law (otherwise the envelope ends before damage onset)."
                 )
         if interface.integration not in ("nodal", "gauss"):
             raise ConfigError("nonlinear.interface.integration must be 'nodal' or 'gauss'.")
@@ -667,10 +679,10 @@ def _validate_nonlinear(config: RVEConfig) -> None:
                 "nonlinear.interface: bk_exponent must be positive and viscosity non-negative."
             )
     load = nl.load
-    if load.component not in _ACTIVE_COMPONENTS[kinematics]:
+    if load.component not in NONLINEAR_ACTIVE_COMPONENTS[kinematics]:
         raise ConfigError(
             f"nonlinear.load.component {load.component!r} is not active for {kinematics} "
-            f"(choose from {', '.join(_ACTIVE_COMPONENTS[kinematics])})."
+            f"(choose from {', '.join(NONLINEAR_ACTIVE_COMPONENTS[kinematics])})."
         )
     if load.max_strain == 0.0 or load.steps < 1:
         raise ConfigError("nonlinear.load needs a non-zero max_strain and at least one step.")
@@ -678,4 +690,7 @@ def _validate_nonlinear(config: RVEConfig) -> None:
         raise ConfigError("nonlinear Newton settings must be positive.")
     if not (nl.device == "cpu" or nl.device.startswith("cuda")):
         raise ConfigError("nonlinear.device must be 'cpu' or 'cuda[:index]'.")
-
+    if nl.backend not in ("python", "julia"):
+        raise ConfigError("nonlinear.backend must be 'python' or 'julia'.")
+    if nl.backend == "julia" and nl.device != "cpu":
+        raise ConfigError("The Julia backend runs on the CPU (nonlinear.device: cpu).")

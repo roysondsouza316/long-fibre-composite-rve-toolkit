@@ -1,0 +1,19 @@
+name = "DiffCohesive"
+uuid = "42fcc454-2dc4-438c-980f-178d08111f76"
+authors = ["Open Source Contributors"]
+version = "0.1.0"
+
+[deps]
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+ForwardDiff = "0.10, 1"
+StaticArrays = "1"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

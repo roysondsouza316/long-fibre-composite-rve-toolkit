@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-from rve2d.config import NonlinearLoadConfig, NonlinearSolveConfig, PhaseMaterialConfig, RVEConfig
+from rve2d.config import (
+    NONLINEAR_ACTIVE_COMPONENTS,
+    NonlinearSolveConfig,
+    PhaseMaterialConfig,
+    RVEConfig,
+)
 from rve2d.exceptions import ConfigError
 from rve2d.nonlinear import linear_solver
 from rve2d.nonlinear.assembly import Evaluation, RVESystem
@@ -18,44 +23,24 @@ from rve2d.nonlinear.constraints import build_dof_map
 from rve2d.nonlinear.laws import build_traction_law
 from rve2d.nonlinear.material import ElementMaterial, element_material
 from rve2d.nonlinear.mesh import RVEMesh, build_rve_mesh
-from rve2d.nonlinear.output import COMPONENTS, write_fields, write_response_csv, write_summary_json
+from rve2d.nonlinear.output import write_fields
+from rve2d.nonlinear.records import (
+    COMPONENT_INDEX,
+    NonlinearResult,
+    StepRecord,
+    load_path_from_config,
+    response_summary,
+    write_response_csv,
+    write_summary_json,
+)
 from rve2d.nonlinear.solver import (
-    LoadPath,
     NewtonSettings,
     SolverState,
-    StepRecord,
     initial_solver_state,
     solve_load_path,
 )
 
-_INDEX = {name: index for index, name in enumerate(COMPONENTS)}
-_ACTIVE = {
-    "plane_strain": ("xx", "yy", "xy"),
-    "generalized_plane_strain": ("xx", "yy", "zz", "xy"),
-    "solid": COMPONENTS,
-}
-
-
-@dataclass(frozen=True)
-class NonlinearResult:
-    summary_path: Path
-    response_path: Path
-    field_files: list[Path]
-    completed: bool
-    peak_stress: float
-    strain_at_peak: float
-    records: list[StepRecord]
-
-
-def load_path_from_config(kinematics: str, load: NonlinearLoadConfig) -> LoadPath:
-    active = [_INDEX[c] for c in _ACTIVE[kinematics]]
-    inactive = [i for i in range(6) if i not in active]
-    loaded = _INDEX[load.component]
-    others = [i for i in active if i != loaded]
-    if load.type == "uniaxial_stress":
-        stress_free = dict.fromkeys(others, 0.0)
-        return LoadPath({loaded: load.max_strain}, inactive, stress_free, load.unload)
-    return LoadPath({loaded: load.max_strain}, inactive + others, {}, load.unload)
+__all__ = ["NonlinearResult", "load_path_from_config", "run_nonlinear_homogenization"]
 
 
 def phase_material(
@@ -117,7 +102,7 @@ def run_nonlinear_homogenization(
             viscosity=interface.viscosity,
             shear_penalty_stiffness=interface.shear_penalty_stiffness,
         ).to(device)
-    active = [_INDEX[c] for c in _ACTIVE[kinematics]]
+    active = [COMPONENT_INDEX[c] for c in NONLINEAR_ACTIVE_COMPONENTS[kinematics]]
     system = RVESystem(
         mesh,
         dof_map,
@@ -154,17 +139,10 @@ def run_nonlinear_homogenization(
         write_fields(out_dir, "nonlinear_final", system, outcome.state, outcome.last_evaluation)
     )
 
-    loaded = _INDEX[nl.load.component]
-    sign = 1.0 if nl.load.max_strain > 0 else -1.0
-    peak = max(outcome.records, key=lambda r: sign * r.macro_stress[loaded])
     response_path = write_response_csv(out_dir / "nonlinear_response.csv", outcome.records)
-    first = outcome.records[1] if len(outcome.records) > 1 else outcome.records[0]
-    initial_modulus = (
-        first.macro_stress[loaded] / first.macro_strain[loaded]
-        if first.macro_strain[loaded] != 0.0
-        else None
-    )
+    response = response_summary(outcome.records, nl.load)
     summary: dict[str, Any] = {
+        "backend": "python",
         "dimension": mesh.dim,
         "kinematics": kinematics,
         "boundary_condition": nl.boundary_condition,
@@ -185,10 +163,7 @@ def run_nonlinear_homogenization(
         "newton_iterations": outcome.total_iterations,
         "increment_cuts": outcome.cuts,
         "messages": outcome.messages,
-        "initial_modulus": initial_modulus,
-        "peak_stress": peak.macro_stress[loaded],
-        "strain_at_peak": peak.macro_strain[loaded],
-        "final": asdict(outcome.records[-1]),
+        **response,
         "runtime_seconds": round(time.time() - started, 2),
         "response_csv": str(response_path),
         "field_files": [str(path) for path in field_files],
@@ -199,7 +174,7 @@ def run_nonlinear_homogenization(
         response_path=response_path,
         field_files=field_files,
         completed=outcome.completed,
-        peak_stress=peak.macro_stress[loaded],
-        strain_at_peak=peak.macro_strain[loaded],
+        peak_stress=response["peak_stress"],
+        strain_at_peak=response["strain_at_peak"],
         records=outcome.records,
     )

@@ -21,27 +21,7 @@ from rve2d.exceptions import SolverError
 from rve2d.nonlinear import linear_solver
 from rve2d.nonlinear.assembly import Evaluation, RVESystem
 from rve2d.nonlinear.material import PlasticState, initial_state
-
-
-@dataclass(frozen=True)
-class LoadPath:
-    """Macro loading as a function of pseudo-time ``t`` in ``[0, end_time]``."""
-
-    prescribed_strain: dict[int, float]  # component -> strain at load factor 1
-    fixed_zero: list[int]  # components held at zero strain (inactive or strain-controlled at 0)
-    stress_controlled: dict[int, float]  # component -> target macro stress at load factor 1
-    unload: bool = False
-
-    @property
-    def end_time(self) -> float:
-        return 2.0 if self.unload else 1.0
-
-    def factor(self, t: float) -> float:
-        return t if t <= 1.0 else 2.0 - t
-
-    @property
-    def free(self) -> list[int]:
-        return sorted(self.stress_controlled)
+from rve2d.nonlinear.records import LoadPath, StepRecord
 
 
 @dataclass(frozen=True)
@@ -61,22 +41,6 @@ class SolverState:
     macro_strain: torch.Tensor
     plastic: PlasticState
     cohesive_history: torch.Tensor
-
-
-@dataclass
-class StepRecord:
-    time: float
-    load_factor: float
-    macro_strain: list[float]
-    macro_stress: list[float]
-    iterations: int
-    max_damage: float
-    damaged_fraction: float
-    mean_damage: float
-    yielded_fraction: float
-    mean_eqps_matrix: float
-    mean_eqps_fibre: float
-    work_density: float
 
 
 @dataclass

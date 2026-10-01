@@ -148,19 +148,21 @@ matrix and a glass-fibre-like inclusion; override per phase.
 
 ## `nonlinear` (plasticity + cohesive interfaces)
 
-Runs only when `enabled: true`; needs `pip install -e ".[nonlinear]"`. Full
+Runs only when `enabled: true`. The python backend needs `pip install -e ".[nonlinear]"`;
+the julia backend needs Julia 1.11+ (see [nonlinear.md](nonlinear.md#julia-backend)). Full
 description, units and outputs in [nonlinear.md](nonlinear.md).
 
 | Field                | Type   | Default            | Notes                                                        |
 | -------------------- | ------ | ------------------ | ------------------------------------------------------------ |
 | `enabled`            | bool   | `false`            | Master switch                                                |
+| `backend`            | enum   | `python`           | `python` (PyTorch) or `julia` (Ferrite.jl + DiffCohesive.jl, CPU) |
 | `kinematics`         | enum   | GPS (2D) / `solid` (3D) | 2D: `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
 | `boundary_condition` | enum   | `periodic`         | `periodic` (needs `periodic_compatible: true`) or `dirichlet` |
 | `matrix`, `fibre`    | object | required           | `youngs_modulus`, `poisson_ratio`, optional `yield_stress` (omit: elastic), `hardening_modulus` (default 0) |
 | `interface`          | object | none               | Cohesive fibre/matrix interfaces; omit or `enabled: false` for perfect bonding |
 | `load`               | object | see below          | Macro load path                                              |
-| `device`             | enum   | `cpu`              | `cpu` or `cuda`                                              |
-| `linear_solver`      | enum   | `auto`             | `auto`, `pardiso`, `scipy`, `tensormesh`                     |
+| `device`             | enum   | `cpu`              | `cpu` or `cuda` (python backend)                             |
+| `linear_solver`      | enum   | `auto`             | `auto`, `pardiso`, `scipy`, `tensormesh` (python backend; Julia uses UMFPACK) |
 | `newton_max_iterations` / `newton_tolerance` | int / float | `25` / `1e-8` | Relative residual tolerance                     |
 | `max_step_cuts`      | int    | `10`               | Max halvings of an increment before the solve stops          |
 | `output_every`       | int    | `0`                | Write VTU fields every N steps (0: final state only)         |

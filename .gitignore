@@ -45,7 +45,7 @@ outputs/
 *.vtk
 
 # Julia
-julia/Manifest.toml
+julia/**/Manifest.toml
 
 # Notebook checkpoints
 .ipynb_checkpoints/

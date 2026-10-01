@@ -18,7 +18,7 @@ from rve2d.synthetic_generation.sem_image import generate_circular_fibre_rve_fro
 from rve2d.validation.checks import QualityReport, validate_geometry
 
 if TYPE_CHECKING:
-    from rve2d.nonlinear.driver import NonlinearResult
+    from rve2d.nonlinear.records import NonlinearResult
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,15 @@ def solve_nonlinear(
     mesh_path: str | Path,
     output_dir: str | Path,
 ) -> NonlinearResult:
-    """Nonlinear RVE solve (J2 plasticity + cohesive interfaces); needs the [nonlinear] extra."""
+    """Nonlinear RVE solve (J2 plasticity + cohesive interfaces).
+
+    ``nonlinear.backend: python`` needs the ``nonlinear`` extra (PyTorch, diffcohesive);
+    ``julia`` runs the Ferrite.jl solver in ``julia/NonlinearRVE`` (needs ``julia`` on PATH).
+    """
+    if config.nonlinear.backend == "julia":
+        from rve2d.nonlinear.julia_bridge import run_julia_nonlinear
+
+        return run_julia_nonlinear(config, mesh_path, output_dir)
     from rve2d.nonlinear.driver import run_nonlinear_homogenization
 
     return run_nonlinear_homogenization(config, mesh_path, output_dir)

@@ -1,11 +1,8 @@
-"""Result files of the nonlinear RVE solve: response CSV, summary JSON and VTU fields."""
+"""VTU field output of the nonlinear RVE solve (bulk and interface)."""
 
 from __future__ import annotations
 
-import csv
-import json
 from pathlib import Path
-from typing import Any
 
 import meshio
 import numpy as np
@@ -13,54 +10,8 @@ import torch
 
 from rve2d.nonlinear.assembly import Evaluation, RVESystem
 from rve2d.nonlinear.material import von_mises
-from rve2d.nonlinear.solver import SolverState, StepRecord
-
-COMPONENTS = ("xx", "yy", "zz", "yz", "xz", "xy")
-
-
-def write_response_csv(path: Path, records: list[StepRecord]) -> Path:
-    header = (
-        ["step", "time", "load_factor"]
-        + [f"e_{c}" for c in COMPONENTS]
-        + [f"s_{c}" for c in COMPONENTS]
-        + [
-            "iterations",
-            "max_damage",
-            "debonded_fraction",
-            "mean_damage",
-            "yielded_fraction",
-            "mean_eqps_matrix",
-            "mean_eqps_fibre",
-            "work_density",
-        ]
-    )
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(header)
-        for index, r in enumerate(records):
-            writer.writerow(
-                [
-                    index,
-                    r.time,
-                    r.load_factor,
-                    *r.macro_strain,
-                    *r.macro_stress,
-                    r.iterations,
-                    r.max_damage,
-                    r.damaged_fraction,
-                    r.mean_damage,
-                    r.yielded_fraction,
-                    r.mean_eqps_matrix,
-                    r.mean_eqps_fibre,
-                    r.work_density,
-                ]
-            )
-    return path
-
-
-def write_summary_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return path
+from rve2d.nonlinear.records import COMPONENTS
+from rve2d.nonlinear.solver import SolverState
 
 
 def total_displacement(system: RVESystem, state: SolverState) -> np.ndarray:

@@ -14,9 +14,16 @@ The `nonlinear` config section runs a small-strain, rate-independent RVE analysi
 - 2D **plane strain** or **generalized plane strain** (uniform out-of-plane strain with zero
   out-of-plane macro stress, the natural setting for a UD cross-section) and 3D solids.
 
-The solver is written in PyTorch and vectorised over elements; the sparse tangent is solved
-with PARDISO (if `pypardiso` is installed), SciPy's SuperLU, or TensorMesh's
-`SparseMatrix` / torch-sla (which also runs on CUDA with `device: cuda`).
+Two interchangeable backends implement the same formulation:
+
+- `backend: python` (default): PyTorch, vectorised over elements, with the
+  traction-separation laws of diffcohesive; the sparse tangent is solved with PARDISO (if
+  `pypardiso` is installed), SciPy's SuperLU, or TensorMesh's `SparseMatrix` / torch-sla
+  (which also runs on CUDA with `device: cuda`).
+- `backend: julia`: Ferrite.jl with [DiffCohesive.jl](../julia/DiffCohesive), the Julia
+  counterpart of diffcohesive in this repository ([julia/NonlinearRVE](../julia/NonlinearRVE)).
+  It needs Julia 1.11+ on PATH but not PyTorch, and reproduces the Python backend to
+  round-off (see [Julia backend](#julia-backend)).
 
 ```bash
 pip install -e ".[gmsh,nonlinear]"          # torch + diffcohesive (+ tensormesh-fem, torch-sla)
@@ -33,6 +40,7 @@ For a GPU install, get the CUDA build of PyTorch from pytorch.org first and add
 ```yaml
 nonlinear:
   enabled: true
+  backend: python                        # or julia (Ferrite.jl + DiffCohesive.jl)
   kinematics: generalized_plane_strain   # 2D: plane_strain | generalized_plane_strain; 3D: solid
   boundary_condition: periodic           # or dirichlet (zero boundary fluctuation)
   matrix: {youngs_modulus: 3500.0, poisson_ratio: 0.35, yield_stress: 60.0, hardening_modulus: 300.0}
@@ -53,8 +61,8 @@ nonlinear:
     max_strain: 0.02
     steps: 40
     unload: false              # true: load to max_strain, then back to zero
-  device: cpu                  # or cuda
-  linear_solver: auto          # auto | pardiso | scipy | tensormesh
+  device: cpu                  # or cuda (python backend)
+  linear_solver: auto          # auto | pardiso | scipy | tensormesh (python backend)
   output_every: 0              # write VTU fields every N steps (0 = final state only)
 ```
 
@@ -151,6 +159,40 @@ values delay and raise the peak.
 `examples/3d/synthetic/nonlinear_cohesive_plastic.yaml` (3D solid, 776 cohesive triangles,
 4,961 unknowns, uniaxial stress to 1.2 %): initial modulus 6.86 GPa, peak 44.0 MPa at
 0.98 % strain; 27 increments, 137 Newton iterations, 37 s.
+
+## Julia backend
+
+`backend: julia` runs the same solve on Ferrite.jl. Two Julia packages live in `julia/`:
+
+- [`DiffCohesive`](../julia/DiffCohesive): traction-separation laws with ForwardDiff
+  tangents, a port of diffcohesive's mixed-mode bilinear law and Alfano shape library with
+  unit-safe regularisation. Its tests check dissipated energies, unit independence, the AD
+  tangent and parity with diffcohesive 0.1.2: tractions agree to 1e-14 relative.
+- [`NonlinearRVE`](../julia/NonlinearRVE): the RVE solver: interface insertion, periodic
+  constraints, J2 plasticity on Tensors.jl, cohesive elements on DiffCohesive, bordered
+  Newton with the same stepping rules, UMFPACK solves, VTU output via Ferrite.
+
+```bash
+julia --project=julia/NonlinearRVE -e 'using Pkg; Pkg.instantiate()'   # once (Julia 1.11+)
+rve2d build-and-solve config.yaml          # with nonlinear.backend: julia
+```
+
+The bridge writes the mesh arrays and `julia_nonlinear_input.toml` to the output directory
+and runs `julia/ferrite_nonlinear_rve.jl`, which instantiates the environment itself on
+first use. Outputs and the summary JSON are the same as for the Python backend, plus
+`julia_nonlinear_stdout.txt`. The package precompiles a small workload, so a solve in a
+fresh process costs about 10 s more than in a warm session.
+
+Both backends take identical increments and Newton iterations on the examples:
+
+| Example | Increments / cuts / iterations | max abs(stress difference) / max stress | Runtime (Python with PARDISO / Julia) |
+|---|---|---|---|
+| 2D, `nonlinear_cohesive_plastic.yaml` | 52 / 1 / 293 (both) | 1.3e-14 | 21 s / 30 s (fresh process) |
+| 3D, `nonlinear_cohesive_plastic.yaml` | 27 / 1 / 137 (both) | 4.5e-15 | 37 s / 39 s (fresh process) |
+
+Damage, debonded and yielded fractions, equivalent plastic strain and work density agree
+to 1e-15 as well; `tests/test_julia_nonlinear.py` checks the same parity on a structured
+mesh whenever the Julia environment is instantiated.
 
 ## Limitations
 

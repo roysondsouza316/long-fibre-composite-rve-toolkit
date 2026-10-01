@@ -415,6 +415,17 @@ def test_nonlinear_config_is_parsed_with_nested_sections() -> None:
             },
             "bilinear_mixed_mode only",
         ),
+        (
+            {
+                "interface": {
+                    "law": "exponential",
+                    "penalty_stiffness": 1e8,
+                    "normal_strength": 50.0,
+                    "mode_i_toughness": 1.5 * 50.0**2 / 1e8,  # enough for bilinear only
+                }
+            },
+            "for the exponential law",
+        ),
     ],
 )
 def test_nonlinear_config_validation(overrides: dict[str, object], message: str) -> None:

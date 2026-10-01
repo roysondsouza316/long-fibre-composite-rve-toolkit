@@ -4,8 +4,9 @@
 representative volume elements (RVEs)** of long-fibre composite plies,
 running linear-elastic homogenization on them via [Ferrite.jl](https://ferrite-fem.github.io/),
 and running **nonlinear RVE solves** with J2 plasticity in the fibres and matrix and
-cohesive-zone fibre/matrix interfaces (PyTorch, with the traction-separation laws of
-[diffcohesive](https://pypi.org/project/diffcohesive/) and TensorMesh sparse solvers).
+cohesive-zone fibre/matrix interfaces, in PyTorch (with the traction-separation laws of
+[diffcohesive](https://pypi.org/project/diffcohesive/) and TensorMesh sparse solvers) or in
+Julia (Ferrite.jl with the bundled DiffCohesive.jl laws).
 
 > Despite the historical `rve2d` name, this package now supports both 2D and
 > 3D RVEs.
@@ -63,12 +64,18 @@ The Julia solve stage additionally requires:
 If `gmsh` is not installed, geometry generation and validation still work, but
 meshing commands will fail with a clear error.
 
-The nonlinear solve (plasticity + cohesive interfaces) is pure Python and needs
-the `nonlinear` extra (PyTorch, diffcohesive, TensorMesh):
+The nonlinear solve (plasticity + cohesive interfaces) has two backends. The default
+Python backend needs the `nonlinear` extra (PyTorch, diffcohesive, TensorMesh):
 
 ```bash
 python -m pip install -e ".[gmsh,nonlinear]"
 python -m pip install pypardiso   # optional, x86 CPUs: several times faster sparse solves
+```
+
+The Julia backend (`nonlinear.backend: julia`) needs Julia 1.11+ and its own environment:
+
+```bash
+julia --project=julia/NonlinearRVE -e 'using Pkg; Pkg.instantiate()'
 ```
 
 ---
@@ -226,7 +233,10 @@ src/rve2d/
 
 julia/
 ├── ferrite_homogenization.jl       # 2D triangle solver
-└── ferrite_homogenization_3d.jl    # 3D tetrahedral solver
+├── ferrite_homogenization_3d.jl    # 3D tetrahedral solver
+├── ferrite_nonlinear_rve.jl        # entry point of the Julia nonlinear backend
+├── DiffCohesive/                   # Julia package: cohesive laws with AD tangents
+└── NonlinearRVE/                   # Julia package: Ferrite.jl plasticity + cohesive RVE solver
 ```
 
 ---
@@ -285,6 +295,9 @@ the generated mesh:
 - consistent Newton tangents (the cohesive tangent comes from autograd through
   the law), adaptive load stepping, PARDISO / SuperLU / TensorMesh solvers on CPU
   and TensorMesh on CUDA
+- an equivalent Julia backend on Ferrite.jl (`backend: julia`) with
+  [DiffCohesive.jl](julia/DiffCohesive), a Julia port of diffcohesive's laws with
+  ForwardDiff tangents; both backends give the same results to round-off
 
 See [`docs/nonlinear.md`](docs/nonlinear.md) for the configuration, the
 formulation and the verification results.
@@ -299,10 +312,16 @@ ruff check .            # lint
 mypy src/rve2d          # type-check (strict)
 ```
 
-CI runs lint + tests on Python 3.11 / 3.12 / 3.13, plus a job with the
-`nonlinear` extra (CPU PyTorch) — see
+CI runs lint + tests on Python 3.11 / 3.12 / 3.13, a job with the `nonlinear`
+extra (CPU PyTorch) and a job testing the two Julia packages — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The nonlinear tests are
-skipped when PyTorch or diffcohesive are not installed.
+skipped when PyTorch or diffcohesive are not installed; the Julia-backend tests
+run when `julia/NonlinearRVE` has been instantiated.
+
+```bash
+julia --project=julia/DiffCohesive -e 'using Pkg; Pkg.test()'
+julia --project=julia/NonlinearRVE -e 'using Pkg; Pkg.test()'
+```
 
 ---
 

@@ -23,6 +23,7 @@ export:
   formats: ["msh"]
 nonlinear:
   enabled: true
+  backend: python             # or julia: Ferrite.jl + DiffCohesive.jl (julia/NonlinearRVE)
   kinematics: generalized_plane_strain
   boundary_condition: periodic
   matrix:                     # epoxy, J2 plasticity with linear hardening
