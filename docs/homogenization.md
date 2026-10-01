@@ -1,65 +1,144 @@
-# Homogenization notes
+# Linear homogenization
 
-The Ferrite.jl bridge runs a unit-cell linear-elastic homogenization on the
-generated mesh. It returns the **homogenized stiffness** $\bar{C}$ in Voigt
-notation along with derived **engineering constants**.
+The `solver` config section computes the **effective (homogenized) stiffness**
+$\bar{C}$ of the RVE in Voigt notation and the **engineering constants** derived from it.
+Two engines implement the same formulation and write the same files:
 
-## What the solver does
+- `engine: python` (default): NumPy/SciPy, vectorised assembly and one sparse LU
+  factorization (`src/rve2d/engines/python/homogenization.py`);
+- `engine: julia`: Ferrite.jl `DofHandler`/`CellValues` assembly and one sparse Cholesky
+  factorization (`FerriteRVE.homogenize` in
+  `src/rve2d/engines/julia/FerriteRVE/src/homogenization.jl`).
 
-For each independent macro strain $\bar{\varepsilon}^{(j)}$ (3 cases in 2D, 6
-in 3D), the solver:
+## Formulation
 
-1. Builds a per-cell constitutive matrix `D` (matrix or fibre, optionally
-   rotated by the configured angles).
-2. Assembles $K \, u = -B^\top D \, \bar{\varepsilon}^{(j)}$ on a constant-strain
-   triangle (2D) or tetrahedron (3D) mesh.
-3. Applies the requested boundary condition (Dirichlet or strong periodic
-   constraints with one anchor node in 3D).
-4. Computes the volume-averaged stress $\bar{\sigma}^{(j)}$ over the unit cell.
+The displacement is split into a macro part and a fluctuation,
+$u = \bar{\varepsilon}\,x + w$. For each unit macro strain $\bar{\varepsilon}^{(j)}$
+(one per active Voigt component) the fluctuation solves
 
-The j-th column of the homogenized stiffness matrix is then
-$\bar{C}_{:, j} = \bar{\sigma}^{(j)}$.
+$$K\,w^{(j)} = -F\,\bar{\varepsilon}^{(j)},\qquad
+K = \sum_e V_e\,B_e^\top D_e B_e,\qquad F = \sum_e V_e\,B_e^\top D_e,$$
+
+on linear triangles (2D) or tetrahedra (3D), with $D_e$ the stiffness of the cell's phase
+(optionally rotated). All load cases share one factorization of $K$. The $j$-th column of
+the effective stiffness is the volume-averaged stress,
+
+$$\bar{C}_{:,j} = \bar{\sigma}^{(j)} = \frac{1}{V}\sum_e V_e\,D_e\left(\bar{\varepsilon}^{(j)} + B_e w^{(j)}\right).$$
+
+## Kinematics
+
+| `kinematics` | Mesh | Displacement | Active strains | $\bar{C}$ |
+|---|---|---|---|---|
+| `plane_stress` | 2D | $u_x, u_y$ | $xx, yy, xy$ | 3×3, from the reduced stiffness $Q$ of each phase |
+| `plane_strain` | 2D | $u_x, u_y$ | $xx, yy, xy$ ($\varepsilon_{zz} = 0$) | 3×3, rows/columns $xx, yy, xy$ of the 3D stiffness |
+| `generalized_plane_strain` | 2D | $u_x, u_y, u_z$ | all six | 6×6 |
+| `solid` | 3D | $u_x, u_y, u_z$ | all six | 6×6 |
+
+**Generalized plane strain** is the natural setting for the cross-section of a
+unidirectional ply with the fibres along $z$: the fields do not vary along $z$, but all
+six macro strains are applied (the fluctuation has an out-of-plane component $w_z(x, y)$
+for the longitudinal shear cases). It gives the full 6×6 stiffness, and so the
+longitudinal modulus, the longitudinal shear moduli and the true transverse Young's
+moduli, from a 2D mesh. It is exact for z-invariant microstructures: on the same
+cross-section, a 3D periodic solve of the extruded mesh gives the same $\bar{C}$ to
+round-off (tested). Plane strain gives the in-plane block of the generalized-plane-strain
+stiffness (also tested).
 
 ## Voigt convention
 
-**2D (3 components):** $(\varepsilon_{xx},\, \varepsilon_{yy},\, 2\varepsilon_{xy})$
-and $(\sigma_{xx},\, \sigma_{yy},\, \sigma_{xy})$.
-
-**3D (6 components):** $(\varepsilon_{xx},\, \varepsilon_{yy},\, \varepsilon_{zz},\, 2\varepsilon_{yz},\, 2\varepsilon_{xz},\, 2\varepsilon_{xy})$
-and $(\sigma_{xx},\, \sigma_{yy},\, \sigma_{zz},\, \sigma_{yz},\, \sigma_{xz},\, \sigma_{xy})$.
+Order $(xx, yy, zz, yz, xz, xy)$ with engineering shear strains,
+$(\varepsilon_{xx}, \varepsilon_{yy}, \varepsilon_{zz}, 2\varepsilon_{yz}, 2\varepsilon_{xz}, 2\varepsilon_{xy})$
+and $(\sigma_{xx}, \sigma_{yy}, \sigma_{zz}, \sigma_{yz}, \sigma_{xz}, \sigma_{xy})$,
+restricted to the active components of the kinematics: $(xx, yy, xy)$ for plane stress and
+plane strain. `homogenization_summary.json` lists them as `voigt_components`.
 
 ## Engineering constants
 
-Computed from $\bar{S} = \bar{C}^{-1}$:
+From the compliance $\bar{S} = \bar{C}^{-1}$ (indices in the Voigt order above):
 
-**2D:**
-$$E_x = 1/\bar{S}_{11},\ E_y = 1/\bar{S}_{22},\ G_{xy} = 1/\bar{S}_{33},\ \nu_{xy} = -\bar{S}_{12}/\bar{S}_{22}.$$
+**6×6 (`solid`, `generalized_plane_strain`):**
 
-**3D:**
-$$E_x = 1/\bar{S}_{11},\ E_y = 1/\bar{S}_{22},\ E_z = 1/\bar{S}_{33},$$
-$$G_{yz} = 1/\bar{S}_{44},\ G_{xz} = 1/\bar{S}_{55},\ G_{xy} = 1/\bar{S}_{66},$$
-$$\nu_{ij} = -\bar{S}_{ij} \cdot E_i.$$
+$$E_x = 1/\bar{S}_{11},\ E_y = 1/\bar{S}_{22},\ E_z = 1/\bar{S}_{33},\quad
+G_{yz} = 1/\bar{S}_{44},\ G_{xz} = 1/\bar{S}_{55},\ G_{xy} = 1/\bar{S}_{66},$$
+$$\nu_{ij} = -\bar{S}_{ij}\,E_i\quad\text{(e.g. } \nu_{xy} = -\bar{S}_{12}/\bar{S}_{11}\text{)}.$$
 
-These are reported in `engineering_constants.csv` and inside
-`ferrite_homogenization_summary.json`.
+**Plane stress** (3×3 in $xx, yy, xy$): $E_x = 1/\bar{S}_{11}$, $E_y = 1/\bar{S}_{22}$,
+$G_{xy} = 1/\bar{S}_{33}$, $\nu_{xy} = -\bar{S}_{12}/\bar{S}_{11}$,
+$\nu_{yx} = -\bar{S}_{12}/\bar{S}_{22}$: the in-plane constants of a thin lamina.
+
+**Plane strain:** the same formulas applied to the plane-strain stiffness give
+*plane-strain moduli*, not Young's moduli (for an isotropic material
+$E^{ps} = E/(1-\nu^2)$ and $\nu^{ps} = \nu/(1-\nu)$). They are reported as
+`ex_plane_strain`, `ey_plane_strain`, `gxy_plane_strain`, `nuxy_plane_strain` and
+`nuyx_plane_strain` so they cannot be mistaken for engineering constants. Use
+`generalized_plane_strain` for the transverse Young's moduli and Poisson's ratios of a UD
+ply.
+
+The constants are written to `engineering_constants.csv` and `homogenization_summary.json`.
 
 ## Boundary conditions
 
-- `dirichlet`: zero displacement on all outer boundaries; the resulting
-  $\bar{C}$ is a **stiff upper bound** because outer boundaries are clamped.
-  Useful for quick sanity checks but not physically homogenizing.
-- `periodic`: strong periodic constraints between matched boundary node
-  pairs, with one anchor in 3D to remove rigid-body translation. Requires
-  `periodic_compatible: true` in the geometry config so gmsh emits a
-  node-matched periodic mesh.
+- `periodic`: the fluctuation is periodic, $w(x^+) = w(x^-)$ for every node on an image
+  face (right, top, back) and its mirror node on the opposite face. Corner and edge nodes
+  are chained to a single master, so the constraints never conflict, and one interior node
+  is fixed to remove the rigid-body translation (the problem is otherwise singular). This
+  needs a node-matched periodic mesh: set `periodic_compatible: true` in the geometry
+  section. The result does not depend on which node is fixed.
+- `dirichlet`: zero fluctuation on the whole boundary, i.e. the boundary displacement is
+  the affine field $\bar{\varepsilon}\,x$ (kinematic uniform boundary conditions). This
+  over-constrains the RVE: $\bar{C}$ is an upper bound of the periodic result and
+  converges to it as the RVE grows.
 
-## Numerical limits
+For any RVE, in the sense of the strain energy
+$\bar{\varepsilon}^\top \bar{C} \bar{\varepsilon}$,
 
-- Elements are constant-strain (linear Lagrange); for accurate stress fields
-  consider denser meshes or higher-order elements (not currently shipped).
-- Cholesky is used on the symmetric system; this assumes a positive-definite
-  $K$ (true for valid material constants and a well-constrained problem).
-- The 3D `solid` orthotropic compliance is built from
-  $E_1, E_2, E_3, G_{12}, G_{13}, G_{23}, \nu_{12}, \nu_{13}, \nu_{23}$ via
-  the standard symmetry $\nu_{ji} = \nu_{ij} E_j / E_i$ and rotated by
-  $R_z R_y R_x$ before being inverted to the global stiffness.
+$$C_\text{Reuss} \le \bar{C}_\text{periodic} \le \bar{C}_\text{dirichlet} \le C_\text{Voigt},$$
+
+which the test suite checks in 2D and 3D.
+
+## Materials and rotations
+
+Phases are assigned from the gmsh physical ids (`matrix_phase_id`, `fibre_phase_id`).
+
+- **Isotropic:** `youngs_modulus`, `poisson_ratio`.
+- **Orthotropic:** plane stress needs the in-plane constants `e1, e2, g12, nu12`; every
+  other kinematics needs all nine 3D constants
+  `e1, e2, e3, g12, g13, g23, nu12, nu13, nu23`. The compliance in material axes is
+  built with $\nu_{ji} = \nu_{ij} E_j / E_i$ and must be positive definite (checked when
+  the config is loaded).
+- **Rotations:** `material_angle_deg` is a rotation about $z$;
+  `material_angle_x/y/z_deg` rotate the material axes by $R = R_z R_y R_x$, and the
+  stiffness becomes $T C T^\top$ with the stress transformation $T$ of $R$. Plane stress
+  allows in-plane rotations only. With fibres along $z$ (generalized plane strain, or 3D
+  cylinders along $z$), an orthotropic fibre whose axis 1 is the fibre direction needs
+  `fibre_material_angle_y_deg: -90` (axis 1 onto $z$).
+- **Precedence:** explicit `solver` angles, then the geometry metadata
+  `phase_orientation_rotations_deg` (written by the 3D generators), then, for the fibres
+  only, the 2D geometry's `orientation_deg` as a rotation about $z$. `rve2d solve` and
+  `solve-ferrite` read the metadata from `geometry_summary.json` next to the mesh, so they
+  apply the same rotations as `build-and-solve`.
+
+## Verification
+
+All of these run in the test suite (`tests/test_homogenization.py`, structured meshes, no
+gmsh needed); the engine-parity tests run when the Julia engine is set up.
+
+| Check | Result (both engines) |
+|---|---|
+| Single material: $\bar{C}$ equals the material stiffness, every kinematics and BC | max relative error 5e-15 |
+| Generalized plane strain vs a 3D periodic solve of the extruded mesh | 1.8e-15 |
+| Plane strain vs the in-plane block of generalized plane strain | 1.3e-16 |
+| Reuss ≤ periodic ≤ dirichlet ≤ Voigt; $\bar{C}$ symmetric | holds |
+| Periodic solution: $u(x^+) - u(x^-) = \bar{\varepsilon}\,(x^+ - x^-)$ at every node pair | holds to 1e-9 |
+| Python engine vs Julia engine: $\bar{C}$, tractions, nodal displacements | agree to 1e-10 or better (about 1e-16 on the examples) |
+
+## Numerical notes
+
+- Elements are linear (constant strain), so stresses are piecewise constant; refine the
+  mesh (`mesh.element_size_*`, `elements_per_circle`) for converged local fields. The
+  effective stiffness converges much faster than the local stresses.
+- The solve needs a positive-definite $K$: valid material constants and either periodic
+  constraints with the anchor node or the Dirichlet boundary. A singular system is reported
+  as an error rather than returning a meaningless stiffness.
+- Linear meshes only (`mesh.mesh_order: 1`, no `recombine`); the config is rejected
+  otherwise.

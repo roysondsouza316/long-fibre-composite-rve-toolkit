@@ -1,0 +1,38 @@
+name = "FerriteRVE"
+uuid = "ea310f07-f5dc-4d1a-8477-ada8e2297a5a"
+authors = ["Open Source Contributors"]
+version = "0.1.0"
+
+[deps]
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
+DiffCohesive = "42fcc454-2dc4-438c-980f-178d08111f76"
+Ferrite = "c061ca5d-56c9-439f-9c0e-210fe06d3992"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
+
+[sources]
+DiffCohesive = {path = "../DiffCohesive"}
+
+[compat]
+DelimitedFiles = "1"
+DiffCohesive = "0.1"
+Ferrite = "1"
+LinearAlgebra = "1"
+PrecompileTools = "1"
+Printf = "1"
+SparseArrays = "1"
+StaticArrays = "1"
+TOML = "1"
+WriteVTK = "1"
+julia = "1.11"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

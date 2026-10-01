@@ -2,155 +2,213 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from rve2d.config import load_config
-from rve2d.study import run_batch_study
-from rve2d.workflow import build_and_solve_rve, build_rve, solve_nonlinear, solve_with_ferrite
+from rve2d.engines import ENGINES, HomogenizationResult, NonlinearResult
+from rve2d.exceptions import RVEError
 
 
 def main(argv: list[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    try:
+        return _run(args)
+    except (RVEError, FileNotFoundError, yaml.YAMLError, json.JSONDecodeError) as exc:
+        if args.traceback:
+            raise
+        print(f"rve2d: error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rve2d",
-        description="2D ply-scale RVE generator and mesher.",
+        description=(
+            "Build 2D/3D RVEs of long-fibre composites and solve them with the Python or the "
+            "Julia (Ferrite.jl) engine."
+        ),
+    )
+    parser.add_argument(
+        "--traceback", action="store_true", help="Show the full traceback on errors."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    validate_parser = subparsers.add_parser(
-        "validate-config",
-        help="Validate a YAML or JSON config.",
-    )
+    validate_parser = subparsers.add_parser("validate-config", help="Validate a YAML/JSON config.")
     validate_parser.add_argument("config_path", type=Path)
 
     build_parser = subparsers.add_parser(
-        "build",
-        help="Generate geometry, mesh it, and export results.",
+        "build", help="Generate the geometry, mesh it and write the metadata."
     )
     build_parser.add_argument("config_path", type=Path)
     build_parser.add_argument("--output-dir", type=Path, default=None)
     build_parser.add_argument("--basename", type=str, default=None)
 
     solve_parser = subparsers.add_parser(
-        "solve-ferrite",
-        help="Run the Ferrite.jl homogenization solve on an existing .msh mesh.",
+        "solve",
+        help="Linear homogenization (solver section) of an existing .msh mesh.",
     )
-    solve_parser.add_argument("config_path", type=Path)
-    solve_parser.add_argument("mesh_path", type=Path)
-    solve_parser.add_argument("--output-dir", type=Path, required=True)
+    _solve_arguments(solve_parser)
+    _engine_argument(solve_parser)
+
+    ferrite_parser = subparsers.add_parser(
+        "solve-ferrite", help="Same as `solve --engine julia` (Ferrite.jl)."
+    )
+    _solve_arguments(ferrite_parser)
 
     nonlinear_parser = subparsers.add_parser(
         "solve-nonlinear",
-        help=(
-            "Run the nonlinear RVE solve (plasticity + cohesive interfaces) on an existing "
-            ".msh mesh."
-        ),
+        help="Nonlinear solve (plasticity + cohesive interfaces) of an existing .msh mesh.",
     )
-    nonlinear_parser.add_argument("config_path", type=Path)
-    nonlinear_parser.add_argument("mesh_path", type=Path)
-    nonlinear_parser.add_argument("--output-dir", type=Path, required=True)
+    _solve_arguments(nonlinear_parser)
+    _engine_argument(nonlinear_parser)
 
     build_solve_parser = subparsers.add_parser(
-        "build-and-solve",
-        help="Build the RVE and run the Ferrite.jl solve pipeline.",
+        "build-and-solve", help="Build the RVE and run every enabled solve."
     )
     build_solve_parser.add_argument("config_path", type=Path)
     build_solve_parser.add_argument("--output-dir", type=Path, default=None)
     build_solve_parser.add_argument("--basename", type=str, default=None)
+    _engine_argument(build_solve_parser)
 
     batch_parser = subparsers.add_parser(
         "batch-study",
-        help="Run build-and-solve across multiple configs and write a study summary CSV.",
+        help="Run build-and-solve for several configs and write study_summary.csv.",
     )
     batch_parser.add_argument("config_paths", type=Path, nargs="+")
     batch_parser.add_argument("--output-dir", type=Path, required=True)
+    batch_parser.add_argument(
+        "--fail-fast", action="store_true", help="Stop at the first failing case."
+    )
+    _engine_argument(batch_parser)
 
-    args = parser.parse_args(argv)
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Check the installation (gmsh, h5py, PyTorch, Julia engine)."
+    )
+    doctor_parser.add_argument(
+        "--setup-julia",
+        action="store_true",
+        help="Also set up the Julia engine environment now (downloads Ferrite.jl).",
+    )
+    return parser
+
+
+def _solve_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("config_path", type=Path)
+    parser.add_argument("mesh_path", type=Path)
+    parser.add_argument("--output-dir", type=Path, required=True)
+
+
+def _engine_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--engine",
+        choices=ENGINES,
+        default=None,
+        help="Override the engine set in the config (solver.engine / nonlinear.engine).",
+    )
+
+
+def _run(args: argparse.Namespace) -> int:
+    # Imported here so that `rve2d doctor` and `--help` work even if a dependency is broken.
+    from rve2d.study import run_batch_study
+    from rve2d.workflow import (
+        build_and_solve_rve,
+        build_rve,
+        solve_homogenization,
+        solve_nonlinear,
+    )
+
+    if args.command == "doctor":
+        from rve2d.doctor import format_checks, run_checks
+
+        checks = run_checks(setup_julia=args.setup_julia)
+        print(format_checks(checks))
+        return 0 if all(check.ok for check in checks if check.required) else 1
 
     if args.command == "batch-study":
-        case_results, summary_csv = run_batch_study(args.config_paths, args.output_dir)
-        batch_payload: dict[str, Any] = {
-            "output_directory": str(args.output_dir),
-            "summary_csv": str(summary_csv),
-            "cases": [
-                {
-                    "case_name": case.case_name,
-                    "config_path": str(case.config_path),
-                    "output_directory": str(case.result.output_directory),
-                    "summary_path": (
-                        str(case.result.ferrite_result.summary_path)
-                        if case.result.ferrite_result is not None
-                        else None
-                    ),
-                    "vtk_path": (
-                        str(case.result.ferrite_result.vtk_path)
-                        if case.result.ferrite_result is not None
-                        and case.result.ferrite_result.vtk_path is not None
-                        else None
-                    ),
-                }
-                for case in case_results
-            ],
-        }
-        print(json.dumps(batch_payload, indent=2))
-        return 0
+        cases, summary_csv = run_batch_study(
+            args.config_paths, args.output_dir, engine=args.engine, fail_fast=args.fail_fast
+        )
+        _print(
+            {
+                "output_directory": str(args.output_dir),
+                "summary_csv": str(summary_csv),
+                "cases": [
+                    {
+                        "case_name": case.case_name,
+                        "status": case.status,
+                        "error": case.error,
+                        "config_path": str(case.config_path),
+                        "output_directory": str(case.output_directory),
+                    }
+                    for case in cases
+                ],
+            }
+        )
+        return 0 if all(case.status == "ok" for case in cases) else 1
 
     config = load_config(args.config_path)
-
     if args.command == "validate-config":
-        print(json.dumps(config.to_dict(), indent=2))
+        _print(config.to_dict())
         return 0
-
-    if args.command == "solve-ferrite":
-        ferrite_result = solve_with_ferrite(config, args.mesh_path, args.output_dir)
-        solve_payload: dict[str, Any] = {
-            "summary_path": str(ferrite_result.summary_path),
-            "stdout_path": str(ferrite_result.stdout_path),
-            "vtk_path": str(ferrite_result.vtk_path) if ferrite_result.vtk_path else None,
-            "homogenized_stiffness": ferrite_result.homogenized_stiffness,
-            "engineering_constants": ferrite_result.engineering_constants,
-            "response_files": [str(path) for path in ferrite_result.response_files],
-        }
-        print(json.dumps(solve_payload, indent=2))
+    if args.command in ("solve", "solve-ferrite"):
+        engine = "julia" if args.command == "solve-ferrite" else args.engine
+        _print(
+            _homogenization_payload(
+                solve_homogenization(config, args.mesh_path, args.output_dir, engine=engine)
+            )
+        )
         return 0
-
     if args.command == "solve-nonlinear":
-        nonlinear = solve_nonlinear(config, args.mesh_path, args.output_dir)
-        print(json.dumps(_nonlinear_payload(nonlinear), indent=2))
+        result = solve_nonlinear(config, args.mesh_path, args.output_dir, engine=args.engine)
+        _print(_nonlinear_payload(result))
         return 0
 
-    builder = build_rve if args.command == "build" else build_and_solve_rve
-    result = builder(
-        config,
-        output_dir=str(args.output_dir) if args.output_dir else None,
-        basename=args.basename,
-    )
+    output_dir = str(args.output_dir) if args.output_dir else None
+    if args.command == "build":
+        build = build_rve(config, output_dir=output_dir, basename=args.basename)
+    else:
+        build = build_and_solve_rve(
+            config, output_dir=output_dir, basename=args.basename, engine=args.engine
+        )
     payload: dict[str, Any] = {
-        "output_directory": str(result.output_directory),
-        "mesh_files": [str(path) for path in result.mesh_files],
-        "metadata_files": [str(path) for path in result.metadata_files],
-        "quality_report": asdict(result.quality_report),
-        "geometry_metadata": result.geometry_metadata,
+        "output_directory": str(build.output_directory),
+        "mesh_files": [str(path) for path in build.mesh_files],
+        "metadata_files": [str(path) for path in build.metadata_files],
+        "quality_report": asdict(build.quality_report),
+        "geometry_metadata": build.geometry_metadata,
     }
-    if result.ferrite_result is not None:
-        payload["ferrite"] = {
-            "summary_path": str(result.ferrite_result.summary_path),
-            "stdout_path": str(result.ferrite_result.stdout_path),
-            "vtk_path": (
-                str(result.ferrite_result.vtk_path) if result.ferrite_result.vtk_path else None
-            ),
-            "homogenized_stiffness": result.ferrite_result.homogenized_stiffness,
-            "engineering_constants": result.ferrite_result.engineering_constants,
-            "response_files": [str(path) for path in result.ferrite_result.response_files],
-        }
-    if result.nonlinear_result is not None:
-        payload["nonlinear"] = _nonlinear_payload(result.nonlinear_result)
-    print(json.dumps(payload, indent=2))
+    if build.homogenization_result is not None:
+        payload["homogenization"] = _homogenization_payload(build.homogenization_result)
+    if build.nonlinear_result is not None:
+        payload["nonlinear"] = _nonlinear_payload(build.nonlinear_result)
+    _print(payload)
     return 0
 
 
-def _nonlinear_payload(result: Any) -> dict[str, Any]:
+def _print(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, indent=2))
+
+
+def _homogenization_payload(result: HomogenizationResult) -> dict[str, Any]:
+    return {
+        "engine": result.engine,
+        "kinematics": result.kinematics,
+        "summary_path": str(result.summary_path),
+        "log_path": str(result.log_path) if result.log_path else None,
+        "vtk_path": str(result.vtk_path) if result.vtk_path else None,
+        "homogenized_stiffness": result.homogenized_stiffness,
+        "engineering_constants": result.engineering_constants,
+        "response_files": [str(path) for path in result.response_files],
+    }
+
+
+def _nonlinear_payload(result: NonlinearResult) -> dict[str, Any]:
     return {
         "summary_path": str(result.summary_path),
         "response_csv": str(result.response_path),

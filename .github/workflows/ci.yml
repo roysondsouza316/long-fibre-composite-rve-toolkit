@@ -6,8 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # System libraries the gmsh wheel loads on Linux.
+  GMSH_SYSTEM_LIBS: libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 libfontconfig1
+
 jobs:
   lint-and-test:
+    name: lint + tests, Python engine (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -23,19 +28,29 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install package and dev dependencies
+      - name: System libraries for the gmsh wheel
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $GMSH_SYSTEM_LIBS
+
+      - name: Install package with gmsh and dev dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,gmsh]"
 
       - name: Ruff (lint)
         run: ruff check .
 
+      - name: Installation check
+        run: rve2d doctor
+
+      # Physics checks of the linear homogenization, meshing and the end-to-end example run
+      # here; the nonlinear and Julia-engine tests skip without their dependencies.
       - name: Pytest
         run: pytest -q
 
   nonlinear:
-    name: nonlinear solver (CPU PyTorch)
+    name: full suite with the nonlinear extra (CPU PyTorch) + mypy
     runs-on: ubuntu-latest
 
     steps:
@@ -50,8 +65,7 @@ jobs:
       - name: System libraries for the gmsh wheel
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 \
-            libxinerama1 libfontconfig1
+          sudo apt-get install -y $GMSH_SYSTEM_LIBS
 
       - name: Install package with the nonlinear extra (CPU-only PyTorch)
         run: |
@@ -59,11 +73,14 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e ".[dev,gmsh,nonlinear]"
 
-      - name: Pytest (nonlinear solver)
-        run: pytest -q tests/test_nonlinear.py
+      - name: Mypy (strict)
+        run: mypy
 
-  julia:
-    name: Julia packages (DiffCohesive, NonlinearRVE)
+      - name: Pytest
+        run: pytest -q
+
+  julia-packages:
+    name: Julia packages (DiffCohesive, FerriteRVE)
     runs-on: ubuntu-latest
 
     steps:
@@ -76,7 +93,52 @@ jobs:
       - uses: julia-actions/cache@v2
 
       - name: DiffCohesive.jl tests
-        run: julia --project=julia/DiffCohesive -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+        run: |
+          julia --project=src/rve2d/engines/julia/DiffCohesive \
+            -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 
-      - name: NonlinearRVE tests
-        run: julia --project=julia/NonlinearRVE -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+      - name: FerriteRVE.jl tests
+        run: |
+          julia --project=src/rve2d/engines/julia/FerriteRVE \
+            -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+
+  engine-parity:
+    name: Python engine vs Julia engine
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - uses: julia-actions/cache@v2
+
+      - name: System libraries for the gmsh wheel
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $GMSH_SYSTEM_LIBS
+
+      - name: Install package with the nonlinear extra (CPU-only PyTorch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev,gmsh,nonlinear]"
+
+      - name: Set up the Julia engine
+        run: |
+          rve2d doctor --setup-julia
+          # the parity tests skip without the engine: fail here instead of passing silently
+          python -c "from rve2d.engines.julia import runner; assert runner.is_instantiated()"
+
+      - name: Engine parity tests (linear, nonlinear, end to end)
+        run: |
+          pytest -q -rs tests/test_homogenization.py tests/test_julia_nonlinear.py \
+            tests/test_end_to_end.py

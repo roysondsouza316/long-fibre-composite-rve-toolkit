@@ -98,10 +98,23 @@ class ExportConfig:
 
 
 @dataclass(frozen=True)
-class FerriteSolveConfig:
+class SolverConfig:
+    """Linear homogenization (the ``solver`` section): effective stiffness of the RVE.
+
+    ``engine`` selects the Python engine (NumPy/SciPy, no extra dependencies) or the Julia
+    engine (Ferrite.jl, needs Julia 1.11+); both give the same results. 2D kinematics:
+    ``plane_stress`` (thin lamina), ``plane_strain`` (eps_zz = 0; gives plane-strain moduli)
+    or ``generalized_plane_strain`` (cross-section of a unidirectional ply with fibres along
+    z: all six strains, so the full 6x6 stiffness and true engineering constants); 3D:
+    ``solid``.
+    """
+
     enabled: bool = False
+    engine: Literal["python", "julia"] = "python"
     boundary_condition: Literal["dirichlet", "periodic"] = "dirichlet"
-    kinematics: Literal["plane_strain", "plane_stress", "solid"] = "plane_strain"
+    kinematics: Literal["plane_strain", "plane_stress", "generalized_plane_strain", "solid"] = (
+        "plane_strain"
+    )
     matrix_material_model: Literal["isotropic", "orthotropic"] = "isotropic"
     matrix_youngs_modulus: float = 3.5e9
     matrix_poisson_ratio: float = 0.35
@@ -139,6 +152,9 @@ class FerriteSolveConfig:
     matrix_phase_id: int = 1
     fibre_phase_id: int = 2
     write_vtk: bool = True
+
+
+FerriteSolveConfig = SolverConfig  # name used before the engines were split
 
 
 @dataclass(frozen=True)
@@ -185,7 +201,7 @@ class NonlinearSolveConfig:
     """Nonlinear RVE solve: J2 plasticity in both phases plus cohesive fibre/matrix interfaces."""
 
     enabled: bool = False
-    backend: Literal["python", "julia"] = "python"
+    engine: Literal["python", "julia"] = "python"
     kinematics: Literal["plane_strain", "generalized_plane_strain", "solid"] | None = None
     boundary_condition: Literal["periodic", "dirichlet"] = "periodic"
     matrix: PhaseMaterialConfig | None = None
@@ -216,7 +232,7 @@ class RVEConfig:
     sem_to_synthetic: SemToSyntheticConfig | None = None
     mesh: MeshConfig = field(default_factory=MeshConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
-    solver: FerriteSolveConfig = field(default_factory=FerriteSolveConfig)
+    solver: SolverConfig = field(default_factory=SolverConfig)
     nonlinear: NonlinearSolveConfig = field(default_factory=NonlinearSolveConfig)
 
     def to_dict(self) -> dict[str, Any]:
@@ -259,7 +275,7 @@ def config_from_dict(payload: dict[str, Any]) -> RVEConfig:
         ),
         mesh=_section(MeshConfig, payload.get("mesh", {}), "mesh"),
         export=_section(ExportConfig, payload.get("export", {}), "export"),
-        solver=_section(FerriteSolveConfig, payload.get("solver", {}), "solver"),
+        solver=_section(SolverConfig, payload.get("solver", {}), "solver"),
         nonlinear=_nonlinear_from_dict(payload.get("nonlinear")),
     )
     _validate_config(config)
@@ -360,121 +376,122 @@ def _validate_sem_to_synthetic(config: SemToSyntheticConfig, dimension: int) -> 
         )
 
 
+def geometry_is_periodic(config: RVEConfig) -> bool:
+    """Whether the geometry section of the active mode is marked ``periodic_compatible``."""
+    section = {
+        "synthetic": config.synthetic,
+        "image": config.image,
+        "sem_to_synthetic": config.sem_to_synthetic,
+    }[config.mode]
+    return bool(section is not None and section.periodic_compatible)
+
+
 def _validate_solver(config: RVEConfig) -> None:
     solver = config.solver
-    if config.dimension == 3 and solver.enabled and solver.kinematics != "solid":
-        raise ConfigError("3D Ferrite solves require kinematics='solid'.")
+    if solver.engine not in ("python", "julia"):
+        raise ConfigError("solver.engine must be 'python' or 'julia'.")
     if solver.matrix_youngs_modulus <= 0.0 or solver.fibre_youngs_modulus <= 0.0:
-        raise ConfigError("Ferrite solver Young's moduli must be positive.")
+        raise ConfigError("Solver Young's moduli must be positive.")
     for poisson in (solver.matrix_poisson_ratio, solver.fibre_poisson_ratio):
         if not -1.0 < poisson < 0.5:
-            raise ConfigError("Ferrite solver Poisson ratios must lie between -1 and 0.5.")
-    if solver.boundary_condition == "periodic":
-        periodic_enabled = (
-            bool(config.synthetic and config.synthetic.periodic_compatible)
-            or bool(config.image and config.image.periodic_compatible)
-            or bool(config.sem_to_synthetic and config.sem_to_synthetic.periodic_compatible)
-        )
-        if not periodic_enabled:
-            raise ConfigError(
-                "Periodic Ferrite solves require a config marked as periodic-compatible."
-            )
-    _validate_material_model(
-        "matrix",
-        solver.matrix_material_model,
-        config.dimension,
-        solver.matrix_e1,
-        solver.matrix_e2,
-        solver.matrix_e3,
-        solver.matrix_g12,
-        solver.matrix_g13,
-        solver.matrix_g23,
-        solver.matrix_nu12,
-        solver.matrix_nu13,
-        solver.matrix_nu23,
-    )
-    _validate_material_model(
-        "fibre",
-        solver.fibre_material_model,
-        config.dimension,
-        solver.fibre_e1,
-        solver.fibre_e2,
-        solver.fibre_e3,
-        solver.fibre_g12,
-        solver.fibre_g13,
-        solver.fibre_g23,
-        solver.fibre_nu12,
-        solver.fibre_nu13,
-        solver.fibre_nu23,
-    )
-    if solver.kinematics == "plane_strain" and (
-        solver.matrix_material_model == "orthotropic"
-        or solver.fibre_material_model == "orthotropic"
-    ):
-        raise ConfigError(
-            "Orthotropic phase materials are currently supported only for plane_stress solves."
-        )
-    if config.dimension == 3:
-        _validate_3d_rotation_inputs(
-            "matrix",
-            solver.matrix_material_angle_deg,
-            solver.matrix_material_angle_x_deg,
-            solver.matrix_material_angle_y_deg,
-            solver.matrix_material_angle_z_deg,
-        )
-        _validate_3d_rotation_inputs(
-            "fibre",
-            solver.fibre_material_angle_deg,
-            solver.fibre_material_angle_x_deg,
-            solver.fibre_material_angle_y_deg,
-            solver.fibre_material_angle_z_deg,
-        )
-
-
-def _validate_material_model(
-    label: str,
-    material_model: Literal["isotropic", "orthotropic"],
-    dimension: int,
-    e1: float | None,
-    e2: float | None,
-    e3: float | None,
-    g12: float | None,
-    g13: float | None,
-    g23: float | None,
-    nu12: float | None,
-    nu13: float | None,
-    nu23: float | None,
-) -> None:
-    if material_model == "isotropic":
+            raise ConfigError("Solver Poisson ratios must lie between -1 and 0.5.")
+    if not solver.enabled:
         return
-    values = {"e1": e1, "e2": e2, "g12": g12, "nu12": nu12}
-    if dimension == 3:
-        values.update(
-            {
-                "e3": e3,
-                "g13": g13,
-                "g23": g23,
-                "nu13": nu13,
-                "nu23": nu23,
-            }
+    if config.dimension == 3 and solver.kinematics != "solid":
+        raise ConfigError("3D solves require kinematics='solid'.")
+    if config.dimension == 2 and solver.kinematics == "solid":
+        raise ConfigError(
+            "2D solves use kinematics plane_stress, plane_strain or generalized_plane_strain."
         )
+    if solver.boundary_condition == "periodic" and not geometry_is_periodic(config):
+        raise ConfigError(
+            f"Periodic solves require the {config.mode} section to set periodic_compatible: true."
+        )
+    if config.mesh.mesh_order != 1 or config.mesh.recombine:
+        raise ConfigError(
+            "The solvers need linear triangles/tetrahedra (mesh.mesh_order: 1, no recombine)."
+        )
+    planar = solver.kinematics == "plane_stress"
+    for label in ("matrix", "fibre"):
+        _validate_material_model(solver, label, planar)
+        _validate_3d_rotation_inputs(
+            label,
+            getattr(solver, f"{label}_material_angle_deg"),
+            getattr(solver, f"{label}_material_angle_x_deg"),
+            getattr(solver, f"{label}_material_angle_y_deg"),
+            getattr(solver, f"{label}_material_angle_z_deg"),
+        )
+        tilted = [
+            axis
+            for axis in ("x", "y")
+            if getattr(solver, f"{label}_material_angle_{axis}_deg") not in (None, 0.0)
+        ]
+        if planar and tilted:
+            raise ConfigError(
+                f"plane_stress rotates the {label} material in plane only; "
+                f"{label}_material_angle_{tilted[0]}_deg needs plane_strain, "
+                "generalized_plane_strain or a 3D solve."
+            )
+
+
+def _validate_material_model(solver: SolverConfig, label: str, planar: bool) -> None:
+    """Orthotropic phases need the constants of their kinematics and must be stable
+    (positive-definite compliance); plane stress needs only the in-plane set."""
+    if getattr(solver, f"{label}_material_model") == "isotropic":
+        return
+    names = ["e1", "e2", "g12", "nu12"]
+    if not planar:
+        names += ["e3", "g13", "g23", "nu13", "nu23"]
+    values = {name: getattr(solver, f"{label}_{name}") for name in names}
     missing = [name for name, value in values.items() if value is None]
     if missing:
-        joined = ", ".join(missing)
-        raise ConfigError(f"Orthotropic {label} material requires: {joined}.")
-    assert e1 is not None and e2 is not None and g12 is not None and nu12 is not None
-    positive_values = [e1, e2, g12]
-    if dimension == 3:
-        assert e3 is not None and g13 is not None and g23 is not None
-        positive_values.extend([e3, g13, g23])
-    if any(value <= 0.0 for value in positive_values):
-        raise ConfigError(f"Orthotropic {label} stiffness entries must be positive.")
-    poisson_values = [nu12]
-    if dimension == 3:
-        assert nu13 is not None and nu23 is not None
-        poisson_values.extend([nu13, nu23])
-    if any(not -1.0 < value < 1.0 for value in poisson_values):
-        raise ConfigError(f"Orthotropic {label} nu12 must lie between -1 and 1.")
+        kind = "plane-stress" if planar else "plane-strain, generalized plane strain and 3D"
+        raise ConfigError(
+            f"Orthotropic {label} material needs {', '.join(missing)} for {kind} solves."
+        )
+    if any(values[name] <= 0.0 for name in names if not name.startswith("nu")):
+        raise ConfigError(f"Orthotropic {label} moduli must be positive.")
+    e1, e2, nu12 = values["e1"], values["e2"], values["nu12"]
+    if planar:
+        compliance = [[1.0 / e1, -nu12 / e1], [-nu12 / e1, 1.0 / e2]]
+    else:
+        e3, nu13, nu23 = values["e3"], values["nu13"], values["nu23"]
+        compliance = [
+            [1.0 / e1, -nu12 / e1, -nu13 / e1],
+            [-nu12 / e1, 1.0 / e2, -nu23 / e2],
+            [-nu13 / e1, -nu23 / e2, 1.0 / e3],
+        ]
+    if not _positive_definite(compliance):
+        raise ConfigError(
+            f"Orthotropic {label} constants are not physically admissible (the compliance "
+            "is not positive definite; check the Poisson ratios against the moduli, e.g. "
+            "nu12^2 < e1/e2)."
+        )
+
+
+def _positive_definite(matrix: list[list[float]]) -> bool:
+    """Leading principal minors of a small symmetric matrix are all positive (Sylvester)."""
+    size = len(matrix)
+    for order in range(1, size + 1):
+        minor = [row[:order] for row in matrix[:order]]
+        if _determinant(minor) <= 0.0:
+            return False
+    return True
+
+
+def _determinant(matrix: list[list[float]]) -> float:
+    if len(matrix) == 1:
+        return matrix[0][0]
+    if len(matrix) == 2:
+        return matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
+    return float(
+        sum(
+            (-1) ** col
+            * matrix[0][col]
+            * _determinant([row[:col] + row[col + 1 :] for row in matrix[1:]])
+            for col in range(len(matrix))
+        )
+    )
 
 
 def _validate_3d_rotation_inputs(
@@ -488,7 +505,7 @@ def _validate_3d_rotation_inputs(
         angle_x_deg is not None or angle_y_deg is not None or angle_z_deg is not None
     ):
         raise ConfigError(
-            f"3D {label} material rotation cannot mix material_angle_deg with x/y/z rotations."
+            f"The {label} material rotation cannot mix material_angle_deg with x/y/z rotations."
         )
 
 
@@ -564,20 +581,8 @@ def _validate_nonlinear(config: RVEConfig) -> None:
         raise ConfigError("3D nonlinear solves require kinematics: solid.")
     if config.dimension == 2 and kinematics == "solid":
         raise ConfigError("2D nonlinear solves use plane_strain or generalized_plane_strain.")
-    if nl.boundary_condition == "periodic":
-        periodic = (
-            (
-                config.mode == "synthetic"
-                and bool(config.synthetic and config.synthetic.periodic_compatible)
-            )
-            or (config.mode == "image" and bool(config.image and config.image.periodic_compatible))
-            or (
-                config.mode == "sem_to_synthetic"
-                and bool(config.sem_to_synthetic and config.sem_to_synthetic.periodic_compatible)
-            )
-        )
-        if not periodic:
-            raise ConfigError("Periodic nonlinear solves require a periodic_compatible geometry.")
+    if nl.boundary_condition == "periodic" and not geometry_is_periodic(config):
+        raise ConfigError("Periodic nonlinear solves require a periodic_compatible geometry.")
     if config.mesh.mesh_order != 1 or config.mesh.recombine:
         raise ConfigError(
             "The nonlinear solver needs linear triangles/tetrahedra (mesh_order: 1, no recombine)."
@@ -654,7 +659,7 @@ def _validate_nonlinear(config: RVEConfig) -> None:
         raise ConfigError("nonlinear Newton settings must be positive.")
     if not (nl.device == "cpu" or nl.device.startswith("cuda")):
         raise ConfigError("nonlinear.device must be 'cpu' or 'cuda[:index]'.")
-    if nl.backend not in ("python", "julia"):
-        raise ConfigError("nonlinear.backend must be 'python' or 'julia'.")
-    if nl.backend == "julia" and nl.device != "cpu":
-        raise ConfigError("The Julia backend runs on the CPU (nonlinear.device: cpu).")
+    if nl.engine not in ("python", "julia"):
+        raise ConfigError("nonlinear.engine must be 'python' or 'julia'.")
+    if nl.engine == "julia" and nl.device != "cpu":
+        raise ConfigError("The Julia engine runs on the CPU (nonlinear.device: cpu).")

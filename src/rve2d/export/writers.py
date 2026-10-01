@@ -8,6 +8,7 @@ from typing import Any
 import meshio
 
 from rve2d.exceptions import RVEError
+from rve2d.mesh_io import read_mesh
 from rve2d.models import GeometryModel
 from rve2d.validation.checks import QualityReport
 
@@ -19,7 +20,7 @@ def convert_mesh_formats(mesh_path: str | Path, formats: list[str], basename: st
     if requested_formats == {"msh"}:
         return written_paths
 
-    mesh = meshio.read(source_path)
+    mesh = read_mesh(source_path)
     for output_format in sorted(requested_formats - {"msh"}):
         destination = source_path.with_name(f"{basename}.{output_format}")
         try:

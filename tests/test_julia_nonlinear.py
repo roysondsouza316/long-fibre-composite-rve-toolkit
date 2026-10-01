@@ -1,8 +1,8 @@
-"""Julia backend of the nonlinear solve (``nonlinear.backend: julia``).
+"""Julia engine of the nonlinear solve (``nonlinear.engine: julia``).
 
 The input-file test needs neither Julia nor PyTorch. The end-to-end test runs when ``julia``
-is on PATH and the ``julia/NonlinearRVE`` environment has been instantiated (it has a
-Manifest.toml); it compares the Julia and Python backends when PyTorch is installed too.
+is on PATH and the Julia engine environment has been set up (``rve2d doctor --setup-julia``);
+it compares the Julia and Python engines when PyTorch is installed too.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ import numpy as np
 import pytest
 
 from rve2d.config import RVEConfig, config_from_dict
-from rve2d.nonlinear.julia_bridge import JULIA_PROJECT, _toml_value, write_julia_input
+from rve2d.engines.julia import runner
+from rve2d.engines.julia.nonlinear import write_julia_input
+from rve2d.engines.julia.runner import _toml_value
 
 
 def structured_mesh(path: Path, n: int = 8) -> Path:
@@ -46,10 +48,10 @@ def structured_mesh(path: Path, n: int = 8) -> Path:
     return path
 
 
-def nonlinear_config(backend: str, **nonlinear: object) -> RVEConfig:
+def nonlinear_config(engine: str, **nonlinear: object) -> RVEConfig:
     section: dict[str, object] = {
         "enabled": True,
-        "backend": backend,
+        "engine": engine,
         "matrix": {
             "youngs_modulus": 3500.0,
             "poisson_ratio": 0.35,
@@ -101,7 +103,7 @@ def test_julia_input_file_describes_the_solve(tmp_path: Path) -> None:
     assert _toml_value(float("inf")) == "inf" and _toml_value([1, 2]) == "[1, 2]"
 
 
-def test_julia_backend_rejects_gpu() -> None:
+def test_julia_engine_rejects_gpu() -> None:
     from rve2d.exceptions import ConfigError
 
     with pytest.raises(ConfigError, match="CPU"):
@@ -109,16 +111,16 @@ def test_julia_backend_rejects_gpu() -> None:
 
 
 def _julia_ready() -> bool:
-    return shutil.which("julia") is not None and (JULIA_PROJECT / "Manifest.toml").exists()
+    return shutil.which("julia") is not None and runner.is_instantiated()
 
 
 requires_julia = pytest.mark.skipif(
-    not _julia_ready(), reason="julia/NonlinearRVE environment not instantiated"
+    not _julia_ready(), reason="Julia engine environment not set up"
 )
 
 
 @requires_julia
-def test_julia_backend_solves_plasticity_and_debonding(tmp_path: Path) -> None:
+def test_julia_engine_solves_plasticity_and_debonding(tmp_path: Path) -> None:
     from rve2d.workflow import solve_nonlinear
 
     mesh = structured_mesh(tmp_path / "rve.msh", n=12)
@@ -132,7 +134,7 @@ def test_julia_backend_solves_plasticity_and_debonding(tmp_path: Path) -> None:
 
 
 @requires_julia
-def test_julia_backend_matches_python_backend(tmp_path: Path) -> None:
+def test_julia_engine_matches_python_engine(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("diffcohesive")
     from rve2d.workflow import solve_nonlinear
@@ -140,7 +142,7 @@ def test_julia_backend_matches_python_backend(tmp_path: Path) -> None:
     mesh = structured_mesh(tmp_path / "rve.msh", n=12)
     config = nonlinear_config("julia")
     python_config = dataclasses.replace(
-        config, nonlinear=dataclasses.replace(config.nonlinear, backend="python")
+        config, nonlinear=dataclasses.replace(config.nonlinear, engine="python")
     )
     julia = solve_nonlinear(config, mesh, tmp_path / "julia")
     python = solve_nonlinear(python_config, mesh, tmp_path / "python")

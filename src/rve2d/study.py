@@ -1,133 +1,170 @@
+"""Batch studies: run build-and-solve for several configs and collect one summary CSV.
+
+Each case gets its own output folder (named after the config file, with parent folders
+added when two configs share a file name). A failing case is recorded with its error and the
+study goes on (unless ``fail_fast``); ``study_summary.csv`` is written in every case.
+"""
+
 from __future__ import annotations
 
 import csv
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from rve2d.config import load_config
 from rve2d.workflow import BuildResult, build_and_solve_rve
+
+ENGINEERING_ORDER = (
+    "ex", "ey", "ez", "gyz", "gxz", "gxy", "nuxy", "nuyx", "nuxz", "nuzx", "nuyz", "nuzy",
+)  # fmt: skip
+FIELDS = (
+    "case_name",
+    "status",
+    "error",
+    "config_path",
+    "output_directory",
+    "engine",
+    "fibre_volume_fraction",
+    *ENGINEERING_ORDER,
+    *(f"{name}_plane_strain" for name in ("ex", "ey", "gxy", "nuxy", "nuyx")),
+    "boundary_condition",
+    "kinematics",
+    "matrix_angle_deg",
+    "fibre_angle_deg",
+    "vtk_path",
+    "summary_path",
+    "stiffness_csv",
+    "engineering_csv",
+    "stress_strain_csv",
+    "traction_csv",
+    "nonlinear_completed",
+    "nonlinear_peak_stress",
+    "nonlinear_strain_at_peak",
+    "nonlinear_summary_path",
+)
+RESPONSE_COLUMNS = {
+    "homogenized_stiffness.csv": "stiffness_csv",
+    "engineering_constants.csv": "engineering_csv",
+    "stress_strain_response.csv": "stress_strain_csv",
+    "traction_response.csv": "traction_csv",
+}
 
 
 @dataclass(frozen=True)
 class StudyCaseResult:
     case_name: str
     config_path: Path
-    result: BuildResult
+    output_directory: Path
+    status: str  # "ok" or "failed"
+    result: BuildResult | None = None
+    error: str | None = None
 
 
 def run_batch_study(
-    config_paths: list[str | Path],
+    config_paths: list[str | Path] | list[Path],
     output_dir: str | Path,
+    engine: str | None = None,
+    fail_fast: bool = False,
 ) -> tuple[list[StudyCaseResult], Path]:
     root_dir = Path(output_dir)
     root_dir.mkdir(parents=True, exist_ok=True)
-    case_results: list[StudyCaseResult] = []
-
-    for config_path in config_paths:
-        path = Path(config_path)
-        config = load_config(path)
-        case_name = path.stem
-        case_output_dir = root_dir / case_name
-        result = build_and_solve_rve(config, output_dir=str(case_output_dir), basename=case_name)
-        case_results.append(
-            StudyCaseResult(
-                case_name=case_name,
-                config_path=path.resolve(),
-                result=result,
-            )
-        )
-
+    paths = [Path(path) for path in config_paths]
+    cases: list[StudyCaseResult] = []
     summary_csv = root_dir / "study_summary.csv"
-    _write_study_summary(summary_csv, case_results)
-    return case_results, summary_csv
+    for path, name in zip(paths, unique_case_names(paths), strict=True):
+        case_dir = root_dir / name
+        try:
+            config = load_config(path)
+            result = build_and_solve_rve(
+                config, output_dir=str(case_dir), basename=name, engine=engine
+            )
+        except Exception as exc:  # one failing case must not lose the others
+            cases.append(
+                StudyCaseResult(
+                    name, path.resolve(), case_dir, "failed", error=f"{type(exc).__name__}: {exc}"
+                )
+            )
+            if fail_fast:
+                _write_study_summary(summary_csv, cases)
+                raise
+            continue
+        cases.append(StudyCaseResult(name, path.resolve(), case_dir, "ok", result=result))
+    _write_study_summary(summary_csv, cases)
+    return cases, summary_csv
 
 
-def _write_study_summary(summary_csv: Path, case_results: list[StudyCaseResult]) -> None:
-    fieldnames = [
-        "case_name",
-        "config_path",
-        "output_directory",
-        "fibre_volume_fraction",
-        "ex",
-        "ey",
-        "ez",
-        "gyz",
-        "gxz",
-        "gxy",
-        "nuxy",
-        "nuyx",
-        "nuxz",
-        "nuzx",
-        "nuyz",
-        "nuzy",
-        "boundary_condition",
-        "kinematics",
-        "matrix_angle_deg",
-        "fibre_angle_deg",
-        "vtk_path",
-        "summary_path",
-        "stiffness_csv",
-        "engineering_csv",
-        "stress_strain_csv",
-        "traction_csv",
-    ]
+def unique_case_names(paths: list[Path]) -> list[str]:
+    """Config file stems, extended with parent folder names where different files share a
+    stem; repeated entries of the same file get ``_2``, ``_3``, ... appended."""
+    resolved = [path.resolve() for path in paths]
+    names = []
+    for path in resolved:
+        others = {other for other in resolved if other.stem == path.stem and other != path}
+        depth = 1
+        while depth < len(path.parts) and any(
+            other.parts[-depth:] == path.parts[-depth:] for other in others
+        ):
+            depth += 1
+        names.append("_".join([*path.parts[-depth:-1], path.stem]))
+    seen: Counter[str] = Counter()
+    unique = []
+    for name in names:
+        seen[name] += 1
+        unique.append(name if seen[name] == 1 else f"{name}_{seen[name]}")
+    return unique
+
+
+def _write_study_summary(summary_csv: Path, cases: list[StudyCaseResult]) -> None:
     with summary_csv.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
         writer.writeheader()
-        for case in case_results:
-            ferrite = case.result.ferrite_result
-            if ferrite is None:
-                continue
-            summary = ferrite.summary_path
-            summary_payload = summary.read_text(encoding="utf-8")
-            row = {
-                "case_name": case.case_name,
-                "config_path": str(case.config_path),
-                "output_directory": str(case.result.output_directory),
-                "fibre_volume_fraction": case.result.geometry_metadata.get(
-                    "target_volume_fraction",
-                    "",
-                ),
-                "ex": ferrite.engineering_constants.get("ex", ""),
-                "ey": ferrite.engineering_constants.get("ey", ""),
-                "ez": ferrite.engineering_constants.get("ez", ""),
-                "gyz": ferrite.engineering_constants.get("gyz", ""),
-                "gxz": ferrite.engineering_constants.get("gxz", ""),
-                "gxy": ferrite.engineering_constants.get("gxy", ""),
-                "nuxy": ferrite.engineering_constants.get("nuxy", ""),
-                "nuyx": ferrite.engineering_constants.get("nuyx", ""),
-                "nuxz": ferrite.engineering_constants.get("nuxz", ""),
-                "nuzx": ferrite.engineering_constants.get("nuzx", ""),
-                "nuyz": ferrite.engineering_constants.get("nuyz", ""),
-                "nuzy": ferrite.engineering_constants.get("nuzy", ""),
-                "boundary_condition": "unknown",
-                "kinematics": "unknown",
-                "matrix_angle_deg": "",
-                "fibre_angle_deg": "",
-                "vtk_path": str(ferrite.vtk_path) if ferrite.vtk_path else "",
-                "summary_path": str(summary),
-                "stiffness_csv": "",
-                "engineering_csv": "",
-                "stress_strain_csv": "",
-                "traction_csv": "",
-            }
+        for case in cases:
+            writer.writerow(_row(case))
 
-            payload = json.loads(summary_payload)
-            row["fibre_volume_fraction"] = payload.get("fibre_volume_fraction", "")
-            row["boundary_condition"] = payload.get("boundary_condition", "")
-            row["kinematics"] = payload.get("kinematics", "")
-            angles = payload.get("material_angles_deg", {})
-            row["matrix_angle_deg"] = angles.get("matrix", "")
-            row["fibre_angle_deg"] = angles.get("fibre", "")
-            response_files = [Path(path) for path in payload.get("response_files", [])]
-            for response_path in response_files:
-                if response_path.name == "homogenized_stiffness.csv":
-                    row["stiffness_csv"] = str(response_path)
-                elif response_path.name == "engineering_constants.csv":
-                    row["engineering_csv"] = str(response_path)
-                elif response_path.name == "stress_strain_response.csv":
-                    row["stress_strain_csv"] = str(response_path)
-                elif response_path.name == "traction_response.csv":
-                    row["traction_csv"] = str(response_path)
-            writer.writerow(row)
+
+def _row(case: StudyCaseResult) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "case_name": case.case_name,
+        "status": case.status,
+        "error": case.error or "",
+        "config_path": str(case.config_path),
+        "output_directory": str(case.output_directory),
+    }
+    result = case.result
+    if result is None:
+        return row
+    homogenization = result.homogenization_result
+    if homogenization is not None:
+        payload = json.loads(homogenization.summary_path.read_text(encoding="utf-8"))
+        angles = payload.get("material_angles_deg", {})
+        row.update(homogenization.engineering_constants)
+        row.update(
+            {
+                "engine": homogenization.engine,
+                "fibre_volume_fraction": payload.get("fibre_volume_fraction", ""),
+                "boundary_condition": payload.get("boundary_condition", ""),
+                "kinematics": payload.get("kinematics", ""),
+                "matrix_angle_deg": angles.get("matrix", ""),
+                "fibre_angle_deg": angles.get("fibre", ""),
+                "vtk_path": str(homogenization.vtk_path) if homogenization.vtk_path else "",
+                "summary_path": str(homogenization.summary_path),
+            }
+        )
+        for path in homogenization.response_files:
+            column = RESPONSE_COLUMNS.get(Path(path).name)
+            if column is not None:
+                row[column] = str(path)
+    nonlinear = result.nonlinear_result
+    if nonlinear is not None:
+        row.update(
+            {
+                "nonlinear_completed": nonlinear.completed,
+                "nonlinear_peak_stress": nonlinear.peak_stress,
+                "nonlinear_strain_at_peak": nonlinear.strain_at_peak,
+                "nonlinear_summary_path": str(nonlinear.summary_path),
+            }
+        )
+    return row

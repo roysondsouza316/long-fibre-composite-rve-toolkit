@@ -10,7 +10,7 @@ image: { ... }              # required if mode == image
 sem_to_synthetic: { ... }   # required if mode == sem_to_synthetic (2D only)
 mesh: { ... }
 export: { ... }
-solver: { ... }             # optional; runs Ferrite.jl when enabled: true
+solver: { ... }             # optional; linear homogenization when enabled: true
 nonlinear: { ... }          # optional; plasticity + cohesive interfaces when enabled: true
 ```
 
@@ -38,9 +38,9 @@ box domain.
 | `random_seed`                       | int      | `0`      | RNG seed for reproducibility                                     |
 | `max_attempts`                      | int      | `100000` | Random-placement attempt cap                                     |
 | `periodic_compatible`               | bool     | `false`  | Emit periodic boundary metadata + node-matched mesh              |
-| `orientation_deg` *(2D)*            | float    | `0.0`    | In-plane fibre orientation; falls through to solver as `nuxy`    |
-| `matrix_orientation_angle_*_deg`    | float?   | `None`   | 3D matrix rotation; piped to Ferrite via geometry metadata       |
-| `fibre_orientation_angle_*_deg`     | float?   | `None`   | 3D fibre rotation; piped to Ferrite via geometry metadata        |
+| `orientation_deg` *(2D)*            | float    | `0.0`    | Fibre material angle about z, recorded in the geometry metadata; the solve uses it when no fibre angle is set in `solver` |
+| `matrix_orientation_angle_*_deg`    | float?   | `None`   | 3D matrix rotation, passed to the solve via the geometry metadata |
+| `fibre_orientation_angle_*_deg`     | float?   | `None`   | 3D fibre rotation, passed to the solve via the geometry metadata  |
 
 ---
 
@@ -61,7 +61,7 @@ Binary segmented mask → 2D polygons or 3D extruded volumes.
 | `domain_width`         | float?   | `None`  | Override derived domain width                                   |
 | `domain_height`        | float?   | `None`  | Override derived domain height                                  |
 | `periodic_compatible`  | bool     | `false` | Emit periodic boundary metadata                                 |
-| `matrix/fibre_orientation_angle_*_deg` | float? | `None` | Per-phase rotations piped to Ferrite via geometry metadata |
+| `matrix/fibre_orientation_angle_*_deg` | float? | `None` | Per-phase rotations passed to the solve via the geometry metadata |
 
 ---
 
@@ -115,54 +115,74 @@ Useful for cohesive interfaces, which need a well-resolved fibre perimeter.
 
 ---
 
-## `solver` (Ferrite.jl)
+## `solver` (linear homogenization)
 
-Run only when `enabled: true`. Materials default to a sensible PEEK-like
-matrix and a glass-fibre-like inclusion; override per phase.
+Runs when `enabled: true`: `build-and-solve` and `batch-study` then include it, and
+`solve` / `solve-ferrite` require it. Materials default to a polymer matrix (3.5 GPa,
+0.35) and glass fibres (70 GPa, 0.2) in SI units; override per phase. See
+[homogenization.md](homogenization.md) for the formulation.
 
 | Field                                      | Type    | Default        | Notes                                                  |
 | ------------------------------------------ | ------- | -------------- | ------------------------------------------------------ |
 | `enabled`                                  | bool    | `false`        | Master switch                                          |
-| `boundary_condition`                       | enum    | `dirichlet`    | `dirichlet` or `periodic`                              |
-| `kinematics`                               | enum    | `plane_strain` | `plane_strain`, `plane_stress`, or `solid` (3D req'd) |
+| `engine`                                   | enum    | `python`       | `python` (NumPy/SciPy) or `julia` (Ferrite.jl, needs Julia 1.11+); `--engine` overrides it |
+| `boundary_condition`                       | enum    | `dirichlet`    | `dirichlet` (zero boundary fluctuation, upper bound) or `periodic` |
+| `kinematics`                               | enum    | `plane_strain` | 2D: `plane_stress`, `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
 | `matrix_material_model` / `fibre_material_model` | enum | `isotropic` | `isotropic` or `orthotropic`                          |
-| `matrix_youngs_modulus` / `matrix_poisson_ratio` | float | 3.5e9 / 0.35 | Used for isotropic matrix                            |
-| `fibre_youngs_modulus`  / `fibre_poisson_ratio`  | float | 70e9  / 0.20 | Used for isotropic fibre                             |
-| `matrix_e1, e2, e3, g12, g13, g23, nu12, nu13, nu23` | float? | `None` | Required for orthotropic matrix (3D needs 3-axis set) |
-| `fibre_e1, e2, e3, g12, g13, g23, nu12, nu13, nu23`  | float? | `None` | Required for orthotropic fibre (3D needs 3-axis set)  |
-| `matrix_material_angle_deg` / `fibre_material_angle_deg`         | float? | `None` | 2D rotation                          |
-| `matrix_material_angle_x/y/z_deg` / `fibre_material_angle_x/y/z_deg` | float? | `None` | 3D rotation; cannot mix with the 2D form |
-| `matrix_cellset`, `fibre_cellset`          | string  | `matrix`/`fibre` | Cell-set names handed to Ferrite                    |
+| `matrix_youngs_modulus` / `matrix_poisson_ratio` | float | 3.5e9 / 0.35 | Isotropic matrix                                     |
+| `fibre_youngs_modulus`  / `fibre_poisson_ratio`  | float | 70e9  / 0.20 | Isotropic fibre                                      |
+| `matrix_e1, e2, e3, g12, g13, g23, nu12, nu13, nu23` | float? | `None` | Orthotropic matrix: `e1, e2, g12, nu12` for plane stress, all nine otherwise |
+| `fibre_e1, e2, e3, g12, g13, g23, nu12, nu13, nu23`  | float? | `None` | Orthotropic fibre: same rule                          |
+| `matrix_material_angle_deg` / `fibre_material_angle_deg`         | float? | `None` | Rotation about z                     |
+| `matrix_material_angle_x/y/z_deg` / `fibre_material_angle_x/y/z_deg` | float? | `None` | Rotation `Rz Ry Rx`; cannot be mixed with `material_angle_deg`; plane stress allows z only |
+| `matrix_cellset`, `fibre_cellset`          | string  | `matrix`/`fibre` | Phase names used in the summary                     |
 | `matrix_phase_id`, `fibre_phase_id`        | int     | `1`/`2`        | gmsh physical ids                                     |
-| `write_vtk`                                | bool    | `true`         | Write `.vtu` for ParaView                             |
+| `write_vtk`                                | bool    | `true`         | Write `homogenization.vtu` for ParaView               |
+
+Which kinematics to use:
+
+- `plane_stress`: a thin lamina loaded in its plane.
+- `plane_strain`: a long body with `eps_zz = 0`; the constants are plane-strain moduli
+  and are reported as `ex_plane_strain`, ... .
+- `generalized_plane_strain`: the cross-section of a UD ply with fibres along z; gives the
+  full 6×6 stiffness and the true engineering constants (longitudinal and transverse)
+  from a 2D mesh. For orthotropic fibres with axis 1 along the fibre, set
+  `fibre_material_angle_y_deg: -90`.
+- `solid`: 3D meshes.
 
 ### Validation rules (enforced by `load_config`)
 
-- Periodic solves require a config marked `periodic_compatible: true`.
-- `kinematics: plane_strain` does not currently support orthotropic phases.
-- 3D Ferrite solves require `kinematics: solid`.
-- Mixing `material_angle_deg` with `material_angle_x/y/z_deg` is rejected.
-- Mesh element sizes must be positive and `min <= max`.
+- `engine` must be `python` or `julia`.
+- Periodic solves require `periodic_compatible: true` in the section of the active
+  `mode`.
+- 2D solves use `plane_stress`, `plane_strain` or `generalized_plane_strain`; 3D solves
+  require `solid`.
+- Orthotropic phases need the constants listed above, positive moduli and a
+  positive-definite compliance (e.g. `nu12^2 < e1/e2`).
+- Mixing `material_angle_deg` with `material_angle_x/y/z_deg` is rejected; plane stress
+  rejects x/y rotations.
+- The mesh must be linear (`mesh_order: 1`, no `recombine`).
+- Moduli must be positive and Poisson ratios in (-1, 0.5).
 
 ---
 
 ## `nonlinear` (plasticity + cohesive interfaces)
 
-Runs only when `enabled: true`. The python backend needs `pip install -e ".[nonlinear]"`;
-the julia backend needs Julia 1.11+ (see [nonlinear.md](nonlinear.md#julia-backend)). Full
+Runs only when `enabled: true`. The Python engine needs `pip install -e ".[nonlinear]"`;
+the Julia engine needs Julia 1.11+ (see [nonlinear.md](nonlinear.md#julia-engine)). Full
 description, units and outputs in [nonlinear.md](nonlinear.md).
 
 | Field                | Type   | Default            | Notes                                                        |
 | -------------------- | ------ | ------------------ | ------------------------------------------------------------ |
 | `enabled`            | bool   | `false`            | Master switch                                                |
-| `backend`            | enum   | `python`           | `python` (PyTorch) or `julia` (Ferrite.jl + DiffCohesive.jl, CPU) |
+| `engine`             | enum   | `python`           | `python` (PyTorch) or `julia` (Ferrite.jl + DiffCohesive.jl, CPU); `--engine` overrides it |
 | `kinematics`         | enum   | GPS (2D) / `solid` (3D) | 2D: `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
 | `boundary_condition` | enum   | `periodic`         | `periodic` (needs `periodic_compatible: true`) or `dirichlet` |
 | `matrix`, `fibre`    | object | required           | `youngs_modulus`, `poisson_ratio`, optional `yield_stress` (omit: elastic), `hardening_modulus` (default 0) |
 | `interface`          | object | none               | Cohesive fibre/matrix interfaces; omit or `enabled: false` for perfect bonding |
 | `load`               | object | see below          | Macro load path                                              |
-| `device`             | enum   | `cpu`              | `cpu` or `cuda` (python backend)                             |
-| `linear_solver`      | enum   | `auto`             | `auto`, `pardiso`, `scipy`, `tensormesh` (python backend; Julia uses UMFPACK) |
+| `device`             | enum   | `cpu`              | `cpu` or `cuda` (Python engine)                              |
+| `linear_solver`      | enum   | `auto`             | `auto`, `pardiso`, `scipy`, `tensormesh` (Python engine; the Julia engine uses UMFPACK) |
 | `newton_max_iterations` / `newton_tolerance` | int / float | `25` / `1e-8` | Relative residual tolerance                     |
 | `max_step_cuts`      | int    | `10`               | Max halvings of an increment before the solve stops          |
 | `output_every`       | int    | `0`                | Write VTU fields every N steps (0: final state only)         |

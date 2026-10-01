@@ -1,13 +1,16 @@
+"""Build an RVE (geometry -> mesh -> metadata) and solve it with the chosen engine."""
+
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from rve2d.config import RVEConfig
+from rve2d.engines import HomogenizationResult, NonlinearResult, homogenize
+from rve2d.engines import solve_nonlinear as _solve_nonlinear
 from rve2d.exceptions import ConfigError
 from rve2d.export.writers import convert_mesh_formats, write_metadata_bundle
-from rve2d.ferrite_bridge import FerriteSolveResult, run_ferrite_homogenization
 from rve2d.image_import.mask_to_geometry import import_mask_geometry
 from rve2d.image_import.mask_to_geometry_3d import import_mask_geometry_3d
 from rve2d.meshing.gmsh_builder import build_mesh_with_gmsh
@@ -17,9 +20,6 @@ from rve2d.synthetic_generation.cylindrical import generate_cylindrical_fibre_rv
 from rve2d.synthetic_generation.sem_image import generate_circular_fibre_rve_from_sem
 from rve2d.validation.checks import QualityReport, validate_geometry
 
-if TYPE_CHECKING:
-    from rve2d.nonlinear.records import NonlinearResult
-
 
 @dataclass(frozen=True)
 class BuildResult:
@@ -28,7 +28,7 @@ class BuildResult:
     metadata_files: list[Path]
     quality_report: QualityReport
     geometry_metadata: dict[str, object]
-    ferrite_result: FerriteSolveResult | None = None
+    homogenization_result: HomogenizationResult | None = None
     nonlinear_result: NonlinearResult | None = None
 
 
@@ -37,14 +37,16 @@ def build_rve(
     output_dir: str | None = None,
     basename: str | None = None,
 ) -> BuildResult:
-    geometry, disconnected_artifacts = _build_geometry(config)
+    geometry, removed_artifacts = _build_geometry(config)
     minimum_spacing_requirement = (
-        config.synthetic.min_spacing if config.synthetic is not None else 0.0
+        config.synthetic.min_spacing
+        if config.mode == "synthetic" and config.synthetic is not None
+        else 0.0
     )
     quality_report = validate_geometry(
         geometry,
         minimum_spacing_requirement=minimum_spacing_requirement,
-        disconnected_artifacts=disconnected_artifacts,
+        disconnected_artifacts=removed_artifacts,
     )
 
     export_dir = Path(output_dir or config.export.output_dir)
@@ -71,46 +73,62 @@ def build_rve(
     )
 
 
+def solve_homogenization(
+    config: RVEConfig,
+    mesh_path: str | Path,
+    output_dir: str | Path,
+    geometry_metadata: dict[str, object] | None = None,
+    engine: str | None = None,
+) -> HomogenizationResult:
+    """Linear homogenization of an existing mesh (``solver`` section).
+
+    Without ``geometry_metadata``, the ``geometry_summary.json`` written by ``build`` next to
+    the mesh is used, so material rotations that come from the geometry are kept.
+    """
+    if not config.solver.enabled:
+        raise ConfigError("Homogenization requested but solver.enabled is false in the config.")
+    mesh_path = _existing_mesh(mesh_path)
+    if geometry_metadata is None:
+        geometry_metadata = load_geometry_metadata(mesh_path)
+    return homogenize(config, mesh_path, output_dir, geometry_metadata, engine)
+
+
 def solve_with_ferrite(
     config: RVEConfig,
     mesh_path: str | Path,
     output_dir: str | Path,
     geometry_metadata: dict[str, object] | None = None,
-) -> FerriteSolveResult:
-    if not config.solver.enabled:
-        raise ConfigError("Ferrite solve requested but solver.enabled is false in the config.")
-    return run_ferrite_homogenization(
-        mesh_path,
-        output_dir,
-        config.solver,
-        geometry_metadata=geometry_metadata,
-    )
+) -> HomogenizationResult:
+    """Linear homogenization with the Julia (Ferrite.jl) engine; see ``solve_homogenization``."""
+    return solve_homogenization(config, mesh_path, output_dir, geometry_metadata, engine="julia")
 
 
 def solve_nonlinear(
     config: RVEConfig,
     mesh_path: str | Path,
     output_dir: str | Path,
+    engine: str | None = None,
 ) -> NonlinearResult:
-    """Nonlinear RVE solve (J2 plasticity + cohesive interfaces).
+    """Nonlinear solve (``nonlinear`` section): J2 plasticity + cohesive interfaces."""
+    if not config.nonlinear.enabled:
+        raise ConfigError("Nonlinear solve requested but nonlinear.enabled is false in the config.")
+    return _solve_nonlinear(config, _existing_mesh(mesh_path), output_dir, engine)
 
-    ``nonlinear.backend: python`` needs the ``nonlinear`` extra (PyTorch, diffcohesive);
-    ``julia`` runs the Ferrite.jl solver in ``julia/NonlinearRVE`` (needs ``julia`` on PATH).
-    """
-    if config.nonlinear.backend == "julia":
-        from rve2d.nonlinear.julia_bridge import run_julia_nonlinear
 
-        return run_julia_nonlinear(config, mesh_path, output_dir)
-    from rve2d.nonlinear.driver import run_nonlinear_homogenization
-
-    return run_nonlinear_homogenization(config, mesh_path, output_dir)
+def _existing_mesh(mesh_path: str | Path) -> Path:
+    path = Path(mesh_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Mesh file not found: {path}")
+    return path
 
 
 def build_and_solve_rve(
     config: RVEConfig,
     output_dir: str | None = None,
     basename: str | None = None,
+    engine: str | None = None,
 ) -> BuildResult:
+    """Build the RVE and run every enabled solve (``engine`` overrides the configured ones)."""
     if not config.solver.enabled and not config.nonlinear.enabled:
         raise ConfigError(
             "build-and-solve needs solver.enabled and/or nonlinear.enabled in the config."
@@ -120,18 +138,21 @@ def build_and_solve_rve(
     if not msh_files:
         raise ConfigError("Solving requires a generated .msh mesh file.")
     metadata_files = list(build_result.metadata_files)
-    ferrite_result = None
+    homogenization_result = None
     if config.solver.enabled:
-        ferrite_result = solve_with_ferrite(
+        homogenization_result = solve_homogenization(
             config,
             msh_files[0],
             build_result.output_directory,
             geometry_metadata=build_result.geometry_metadata,
+            engine=engine,
         )
-        metadata_files.append(ferrite_result.summary_path)
+        metadata_files.append(homogenization_result.summary_path)
     nonlinear_result = None
     if config.nonlinear.enabled:
-        nonlinear_result = solve_nonlinear(config, msh_files[0], build_result.output_directory)
+        nonlinear_result = solve_nonlinear(
+            config, msh_files[0], build_result.output_directory, engine=engine
+        )
         metadata_files.append(nonlinear_result.summary_path)
     return BuildResult(
         output_directory=build_result.output_directory,
@@ -139,9 +160,21 @@ def build_and_solve_rve(
         metadata_files=metadata_files,
         quality_report=build_result.quality_report,
         geometry_metadata=build_result.geometry_metadata,
-        ferrite_result=ferrite_result,
+        homogenization_result=homogenization_result,
         nonlinear_result=nonlinear_result,
     )
+
+
+def load_geometry_metadata(mesh_path: str | Path) -> dict[str, object] | None:
+    """Geometry metadata from the ``geometry_summary.json`` next to a mesh, if present."""
+    summary = Path(mesh_path).with_name("geometry_summary.json")
+    if not summary.exists():
+        return None
+    try:
+        metadata = json.loads(summary.read_text(encoding="utf-8")).get("metadata")
+    except (OSError, json.JSONDecodeError):
+        return None
+    return metadata if isinstance(metadata, dict) else None
 
 
 def _build_geometry(config: RVEConfig) -> tuple[GeometryModel, int]:

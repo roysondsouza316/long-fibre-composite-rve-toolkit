@@ -23,7 +23,7 @@ export:
   formats: ["msh"]
 nonlinear:
   enabled: true
-  backend: python             # or julia: Ferrite.jl + DiffCohesive.jl (julia/NonlinearRVE)
+  engine: python              # or julia: Ferrite.jl + DiffCohesive.jl (engines/julia/FerriteRVE)
   kinematics: solid
   boundary_condition: periodic
   matrix:

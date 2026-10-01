@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rve2d-fibre"
-version = "0.1.0"
-description = "2D and 3D representative volume element generation, meshing, and homogenization for long-fibre composite plies."
+version = "0.2.0"
+description = "2D and 3D RVEs of long-fibre composite plies: geometry, meshing, linear homogenization and nonlinear (plasticity + cohesive interface) solves with a Python or a Julia (Ferrite.jl) engine."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -38,6 +38,7 @@ dependencies = [
   "scikit-image>=0.26",
   "PyYAML>=6.0",
   "meshio>=5.3",
+  "h5py>=3.8",  # XDMF export (the default mesh format)
 ]
 
 [project.optional-dependencies]
@@ -67,6 +68,22 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+# The Julia engine (FerriteRVE and DiffCohesive packages + entry script) ships with the wheel.
+"rve2d.engines.julia" = [
+  "run.jl",
+  "FerriteRVE/Project.toml",
+  "FerriteRVE/README.md",
+  "FerriteRVE/src/*.jl",
+  "FerriteRVE/test/*.jl",
+  "DiffCohesive/Project.toml",
+  "DiffCohesive/README.md",
+  "DiffCohesive/src/*.jl",
+  "DiffCohesive/test/*.jl",
+  "DiffCohesive/test/*.csv",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -81,6 +98,7 @@ select = ["E", "F", "I", "B", "UP", "N", "C4"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+mypy_path = "src"
 packages = ["rve2d"]
 
 [[tool.mypy.overrides]]

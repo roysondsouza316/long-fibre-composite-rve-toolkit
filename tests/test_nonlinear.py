@@ -16,17 +16,17 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("diffcohesive")
 
 from rve2d.config import ConfigError, config_from_dict  # noqa: E402
-from rve2d.nonlinear.assembly import RVESystem  # noqa: E402
-from rve2d.nonlinear.constraints import build_dof_map  # noqa: E402
-from rve2d.nonlinear.laws import build_traction_law  # noqa: E402
-from rve2d.nonlinear.material import (  # noqa: E402
+from rve2d.engines.python.constraints import build_dof_map  # noqa: E402
+from rve2d.engines.python.mesh import RVEMesh, insert_cohesive_interfaces  # noqa: E402
+from rve2d.engines.python.nonlinear.assembly import RVESystem  # noqa: E402
+from rve2d.engines.python.nonlinear.laws import build_traction_law  # noqa: E402
+from rve2d.engines.python.nonlinear.material import (  # noqa: E402
     PlasticState,
     element_material,
     initial_state,
     j2_return_mapping,
 )
-from rve2d.nonlinear.mesh import RVEMesh, insert_cohesive_interfaces  # noqa: E402
-from rve2d.nonlinear.solver import (  # noqa: E402
+from rve2d.engines.python.nonlinear.solver import (  # noqa: E402
     LoadPath,
     NewtonSettings,
     initial_solver_state,
@@ -165,7 +165,7 @@ def test_interface_insertion_separates_phases_and_orients_normals(dim: int) -> N
     assert set(np.unique(top).tolist()) <= fibre_nodes
     # the square/prism fibre spans [0.3, 0.7]: every facet normal points towards its centre
     centre = np.full(dim, 0.5)
-    from rve2d.nonlinear.mesh import _facet_normals
+    from rve2d.engines.python.mesh import _facet_normals
 
     normals = _facet_normals(mesh.points, bottom)
     to_centre = centre - mesh.points[bottom].mean(axis=1)
@@ -465,3 +465,74 @@ def test_cli_build_and_solve_nonlinear_end_to_end(tmp_path: Path) -> None:
     assert math.isfinite(summary["peak_stress"]) and summary["peak_stress"] > 0.0
     assert (tmp_path / "out" / "nonlinear_final.vtu").exists()
     assert (tmp_path / "out" / "nonlinear_final_interface.vtu").exists()
+
+
+@pytest.mark.parametrize(
+    ("dim", "kinematics"), [(2, "plane_strain"), (2, "generalized_plane_strain"), (3, "solid")]
+)
+def test_elastic_nonlinear_solve_reproduces_the_linear_homogenization(
+    tmp_path: Path, dim: int, kinematics: str
+) -> None:
+    """Perfectly bonded elastic phases under uniaxial strain: the macro stress is a column of
+    the effective stiffness computed by the linear homogenization on the same mesh."""
+    from _meshes import cube_msh, square_msh
+
+    from rve2d.engines.common.materials import ACTIVE_VOIGT
+    from rve2d.workflow import solve_homogenization, solve_nonlinear
+
+    mesh = square_msh(tmp_path / "rve.msh") if dim == 2 else cube_msh(tmp_path / "rve.msh")
+    synthetic: dict[str, object] = {
+        "domain_width": 1.0,
+        "domain_height": 1.0,
+        "fibre_radius": 0.1,
+        "target_volume_fraction": 0.1,
+        "periodic_compatible": True,
+    }
+    if dim == 3:
+        synthetic["domain_depth"] = 1.0
+    base = {"mode": "synthetic", "dimension": dim, "synthetic": synthetic}
+    linear = solve_homogenization(
+        config_from_dict(
+            base
+            | {
+                "solver": {
+                    "enabled": True,
+                    "kinematics": kinematics,
+                    "boundary_condition": "periodic",
+                    "matrix_youngs_modulus": 3500.0,
+                    "matrix_poisson_ratio": 0.35,
+                    "fibre_youngs_modulus": 70000.0,
+                    "fibre_poisson_ratio": 0.2,
+                }
+            }
+        ),
+        mesh,
+        tmp_path / "linear",
+        engine="python",
+    )
+    active = ACTIVE_VOIGT[kinematics]
+    stiffness = np.zeros((6, 6))
+    stiffness[np.ix_(active, active)] = linear.homogenized_stiffness
+    for component in ("xx", "xy"):
+        section = {
+            "enabled": True,
+            "engine": "python",
+            "kinematics": kinematics,
+            "boundary_condition": "periodic",
+            "matrix": {"youngs_modulus": 3500.0, "poisson_ratio": 0.35},
+            "fibre": {"youngs_modulus": 70000.0, "poisson_ratio": 0.2},
+            "load": {"type": "uniaxial_strain", "component": component, "max_strain": 1e-3,
+                     "steps": 1},
+        }  # fmt: skip
+        result = solve_nonlinear(
+            config_from_dict(base | {"nonlinear": section}), mesh, tmp_path / component
+        )
+        assert result.completed
+        strain = np.asarray(result.records[-1].macro_strain)
+        stress = np.asarray(result.records[-1].macro_stress)
+        expected = stiffness @ strain
+        # (plane strain: the nonlinear solve also reports s_zz, which the 3x3 does not cover)
+        tolerance = 1e-10 * np.abs(expected).max()
+        np.testing.assert_allclose(
+            stress[list(active)], expected[list(active)], rtol=0, atol=tolerance
+        )

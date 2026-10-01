@@ -20,14 +20,14 @@ examples/
 | Goal                                             | Use                                                 |
 | ------------------------------------------------ | --------------------------------------------------- |
 | Quick 2D smoke test                              | `2d/synthetic/basic.yaml`                           |
-| 2D periodic homogenization (Ferrite.jl)          | `2d/synthetic/periodic_solve.yaml`                  |
+| 2D periodic homogenization                       | `2d/synthetic/periodic_solve.yaml`                  |
 | 2D rotated orthotropic phase materials           | `2d/synthetic/orthotropic_solve.yaml`               |
 | Build 2D RVE from a binary mask                  | `2d/image/basic_solve.yaml`                         |
 | Same with rotated orthotropic phase materials    | `2d/image/oriented_solve.yaml`                      |
 | Convert a raw SEM image into circular fibres     | `2d/sem/to_synthetic.yaml`                          |
 | Just import the SEM micrograph as polygons       | `2d/sem/import.yaml`                                |
 | 3D smoke test                                    | `3d/synthetic/basic.yaml`                           |
-| 3D periodic homogenization (Ferrite.jl, solid)   | `3d/synthetic/periodic_solve.yaml`                  |
+| 3D periodic homogenization (solid)               | `3d/synthetic/periodic_solve.yaml`                  |
 | 3D rotated orthotropic phases (explicit angles)  | `3d/synthetic/orthotropic_solve.yaml`               |
 | 3D rotated orthotropic phases (workflow angles)  | `3d/synthetic/workflow_oriented_solve.yaml`         |
 | 3D RVE from an extruded 2D mask                  | `3d/image/extruded.yaml`                            |
@@ -41,12 +41,18 @@ examples/
 rve2d validate-config examples/2d/synthetic/basic.yaml
 rve2d build           examples/2d/synthetic/basic.yaml
 rve2d build-and-solve examples/2d/synthetic/periodic_solve.yaml
+rve2d build-and-solve examples/2d/synthetic/periodic_solve.yaml --engine julia   # Ferrite.jl
 rve2d build-and-solve examples/2d/synthetic/nonlinear_cohesive_plastic.yaml   # needs .[nonlinear]
 ```
 
+Every solve runs on the Python engine unless the config sets `engine: julia` (in the
+`solver` or `nonlinear` section) or `--engine julia` is given; both engines give the same
+results. The Julia engine needs Julia 1.11+ (`rve2d doctor --setup-julia` prepares it).
+
 The nonlinear examples use mm / MPa / N/mm units. On a 4-core CPU with
 `pypardiso` installed, the 2D example solves in about 20 s and the 3D one in
-about 40 s; SciPy's SuperLU fallback is slower. See
+about 40 s with the Python engine (SciPy's SuperLU fallback is slower), and in
+about 30 s and 40 s with the Julia engine. See
 [`docs/nonlinear.md`](../docs/nonlinear.md).
 
 `image_path` and `output_dir` in each config are relative to the directory

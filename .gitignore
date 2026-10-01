@@ -44,8 +44,9 @@ outputs/
 *.vtu
 *.vtk
 
-# Julia
-julia/**/Manifest.toml
+# Julia engine environment (set up per machine by rve2d)
+src/rve2d/engines/julia/**/Manifest.toml
+src/rve2d/engines/julia/**/.rve2d-setup
 
 # Notebook checkpoints
 .ipynb_checkpoints/
