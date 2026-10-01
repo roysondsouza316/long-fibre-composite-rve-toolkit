@@ -12,6 +12,7 @@ function phase_material(table::AbstractDict)
         plastic_poisson_ratio = Float64(get(table, "plastic_poisson_ratio", 0.5)),
         damage_onset = Float64(get(table, "damage_onset_strain", Inf)),
         fracture_energy = Float64(get(table, "fracture_energy", Inf)),
+        saturation_stress = Float64(get(table, "saturation_stress", Inf)),
     )
 end
 

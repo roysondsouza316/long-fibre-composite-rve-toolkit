@@ -187,9 +187,13 @@ def test_engines_agree_on_longitudinal_shear_of_an_extruded_layer(tmp_path: Path
 
 
 @requires_julia
-def test_engines_agree_with_a_pressure_dependent_damaging_matrix(tmp_path: Path) -> None:
+@pytest.mark.parametrize("saturation", [None, 55.0])
+def test_engines_agree_with_a_pressure_dependent_damaging_matrix(
+    tmp_path: Path, saturation: float | None
+) -> None:
     """Paraboloidal plasticity (compressive yield 1.5x tensile, plastic Poisson 0.3) with
-    ductile damage in the matrix, under transverse compression."""
+    linear or Voce hardening and ductile damage in the matrix, under transverse
+    compression."""
     pytest.importorskip("torch")
     pytest.importorskip("diffcohesive")
     from rve2d.workflow import solve_nonlinear
@@ -200,6 +204,8 @@ def test_engines_agree_with_a_pressure_dependent_damaging_matrix(tmp_path: Path)
         "hardening_modulus": 300.0, "compressive_yield_stress": 60.0,
         "plastic_poisson_ratio": 0.3, "damage_onset_strain": 0.002, "fracture_energy": 0.3,
     }  # fmt: skip
+    if saturation is not None:
+        matrix.update({"saturation_stress": saturation, "hardening_modulus": 3000.0})
     config = nonlinear_config(
         "julia", matrix=matrix, load={"max_strain": -0.03, "steps": 12}
     )

@@ -59,7 +59,8 @@ function system_for(mesh; matrix = (E_MATRIX, NU_MATRIX, Inf, 0.0),
         fibre = (70000.0, 0.2, Inf, 0.0), interface = (K = 1.0e7, T = 30.0, G = 0.05),
         bc = "periodic")
     material(p) = PhaseMaterial(; youngs_modulus = p[1], poisson_ratio = p[2],
-        yield_stress = p[3], hardening_modulus = p[4])
+        yield_stress = p[3], hardening_modulus = p[4],
+        saturation_stress = length(p) > 4 ? p[5] : Inf)
     materials = [phase == 2 ? material(fibre) : material(matrix) for phase in mesh.phase]
     law = n_cohesive(mesh) == 0 ? nothing :
         BilinearMixedMode(; stiffness = interface.K, normal_strength = interface.T,
@@ -127,6 +128,41 @@ end
                 sy + E_MATRIX * H / (E_MATRIX + H) * (e - sy / E_MATRIX)
             @test isapprox(r.macro_stress[1], expected; rtol = 1.0e-8)
         end
+    end
+end
+
+@testset "Voce hardening saturates on the uniaxial curve" begin
+    sy, H, ss = 60.0, 3000.0, 80.0
+    mesh = rve(2, 6; fibre = nothing)
+    same = (E_MATRIX, NU_MATRIX, sy, H, ss)
+    out = solve(system_for(mesh; matrix = same, fibre = same),
+        uniaxial("generalized_plane_strain", 0.1); steps = 20)
+    @test out.completed
+    for r in out.records[2:end]
+        e, s = r.macro_strain[1], r.macro_stress[1]
+        plastic = e - s / E_MATRIX  # the axial plastic strain is the equivalent one
+        expected = plastic <= 1.0e-12 ? E_MATRIX * e :
+            ss - (ss - sy) * exp(-H * plastic / (ss - sy))
+        @test isapprox(s, expected; rtol = 1.0e-8)
+    end
+    @test isapprox(out.records[end].macro_stress[1], ss; rtol = 1.0e-5)
+end
+
+@testset "material update is type-stable and allocation-free" begin
+    epoxy = PhaseMaterial(; youngs_modulus = 3350.0, poisson_ratio = 0.35, yield_stress = 50.0,
+        hardening_modulus = 3000.0, compressive_yield_stress = 75.0,
+        plastic_poisson_ratio = 0.3, damage_onset = 0.01, fracture_energy = 0.002,
+        saturation_stress = 80.0)
+    epoxy = FerriteRVE.with_characteristic_length(epoxy, 0.001)
+    j2 = PhaseMaterial(; youngs_modulus = 3350.0, poisson_ratio = 0.35, yield_stress = 50.0,
+        hardening_modulus = 300.0)
+    strain = FerriteRVE.macro_tensor([0.01, -0.004, 0.0, 0.0, 0.03, 0.0])
+    state = FerriteRVE.PlasticState()
+    allocations(m) = @allocated FerriteRVE.material_update(strain, state, m)
+    for m in (epoxy, j2)
+        @inferred FerriteRVE.material_update(strain, state, m)
+        allocations(m)
+        @test allocations(m) == 0
     end
 end
 

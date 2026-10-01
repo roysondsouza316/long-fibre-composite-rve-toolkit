@@ -3,7 +3,10 @@
 The `nonlinear` config section runs a small-strain, rate-independent RVE analysis with
 
 - **J2 (von Mises) plasticity** with linear isotropic hardening in the matrix and/or the
-  fibres (omit `yield_stress` for an elastic phase);
+  fibres (omit `yield_stress` for an elastic phase), or the **pressure-dependent
+  paraboloidal plasticity** of epoxies (different yield stresses in tension and
+  compression, non-associated flow), optionally with **ductile damage** regularised by the
+  element size (crack band), see [Matrix plasticity and damage](#matrix-plasticity-and-damage);
 - **zero-thickness cohesive elements** on every fibre/matrix interface, with the
   traction-separation laws of [`diffcohesive`](https://pypi.org/project/diffcohesive/)
   (mixed-mode bilinear with Benzeggagh-Kenane or power-law closure, or the Alfano shape
@@ -14,8 +17,8 @@ The `nonlinear` config section runs a small-strain, rate-independent RVE analysi
 - 2D **plane strain** or **generalized plane strain** (uniform out-of-plane strain with zero
   out-of-plane macro stress, the natural setting for a UD cross-section) and 3D solids.
 
-The laminate pipeline ([laminate.md](laminate.md)) runs this solve for the transverse and
-shear curves of a ply.
+The laminate pipeline ([laminate.md](laminate.md)) runs this solve for the transverse
+tension, transverse compression and shear curves of a ply.
 
 Two interchangeable engines implement the same formulation:
 
@@ -50,6 +53,17 @@ nonlinear:
   boundary_condition: periodic           # or dirichlet (zero boundary fluctuation)
   matrix: {youngs_modulus: 3500.0, poisson_ratio: 0.35, yield_stress: 60.0, hardening_modulus: 300.0}
   fibre:  {youngs_modulus: 70000.0, poisson_ratio: 0.2}          # elastic (no yield_stress)
+  # or a pressure-dependent epoxy with damage (all keys below are optional):
+  # matrix:
+  #   youngs_modulus: 3350.0
+  #   poisson_ratio: 0.35
+  #   yield_stress: 50.0                # yield in uniaxial tension
+  #   compressive_yield_stress: 75.0    # yield in uniaxial compression (default: yield_stress)
+  #   plastic_poisson_ratio: 0.3        # lateral / axial plastic strain (default 0.5)
+  #   hardening_modulus: 3000.0         # in tension; compression hardens in proportion
+  #   saturation_stress: 80.0           # Voce hardening towards this stress (default: linear)
+  #   damage_onset_strain: 0.1          # equivalent plastic strain at damage onset
+  #   fracture_energy: 0.002            # G_f [stress * length], dissipated per crack area
   interface:
     law: bilinear_mixed_mode   # or bilinear | linear-parabolic | exponential | trapezoidal
     penalty_stiffness: 1.0e8   # K       [stress / length]
@@ -93,11 +107,52 @@ share coordinates. Periodicity ties every image-face node to its mirror partner 
 per side of the interface) and one matrix node (an interior one when the mesh has any)
 carries the rigid-body anchor.
 
-Newton-Raphson uses the consistent tangent of both nonlinearities: the J2 algorithmic
-tangent (Simo & Hughes 1998) and the traction-separation tangent obtained by forward-mode
+Newton-Raphson uses the consistent tangent of both nonlinearities: the algorithmic
+tangent of the plasticity model (J2: Simo & Hughes 1998; paraboloidal model and damage:
+below) and the traction-separation tangent obtained by forward-mode
 autograd through the diffcohesive law, so any law (analytic or neural) gets an exact
 tangent. History variables are committed only after a converged increment; failed
 increments are halved and grown back (x1.5) after easy convergence.
+
+### Matrix plasticity and damage
+
+With `compressive_yield_stress` (σc0) different from `yield_stress` (σt0), or
+`plastic_poisson_ratio` (νp) below 0.5, a phase follows the paraboloidal yield criterion
+used for epoxy matrices (Tschoegl 1971; Melro et al. 2013),
+
+    f = q² + 3 p (σc − σt) − σc σt,    p = tr(σ) / 3,  q = von Mises stress,
+
+which reaches the yield stress σt in uniaxial tension and σc in uniaxial compression, and
+a non-associated flow potential `g = q² + α p²` with `α = 9 (1 − 2νp) / (2 (1 + νp))`, so
+that the plastic strain in uniaxial loading has the lateral-to-axial ratio νp. Hardening
+is homothetic, `σc = σc0 σt / σt0`, and in tension either linear, `σt = σt0 + H ε̄p`, or,
+with `saturation_stress` σs, of Voce's saturating form
+
+    σt = σs − (σs − σt0) exp(−H ε̄p / (σs − σt0))      (initial slope H),
+
+which lets a polymer matrix level off at its strength in tension, compression
+(`σs σc0 / σt0`) and shear (`sqrt(σc σt / 3)` on the paraboloid). `ε̄p` is the equivalent
+plastic strain with increment `dε̄p = sqrt(dεp : dεp / (1 + 2νp²))`, which is the axial
+plastic strain in uniaxial tension or compression. The return mapping solves one scalar
+equation for the plastic multiplier (safeguarded Newton, to round-off) and gives the exact,
+non-symmetric consistent tangent. With σc0 = σt0 and νp = 0.5 it is J2 plasticity; such a
+phase with linear hardening and no damage keeps the closed-form J2 return mapping.
+
+With `damage_onset_strain` and `fracture_energy`, damage starts when ε̄p reaches the onset
+value ε̄p0 and grows linearly with it,
+
+    d = min(0.99, (ε̄p − ε̄p0) l_e σt(ε̄p0) / (2 G_f)),    σ = (1 − d) σ̃,
+
+where σ̃ is the stress of the plasticity model and `l_e` the element's crack-band length
+(`sqrt(2A)` for a triangle, `(6V)^(1/3)` for a tetrahedron; Bažant & Oh 1983). Without
+hardening after onset, a localised band of one element dissipates `G_f` per unit crack
+area, whatever the element size (with hardening a little more). The damage term is part of
+the consistent tangent. Damage turns the strain-controlled response into a softening one;
+when it localises in a band the macro response can snap back, and the solve then stops
+after `max_step_cuts` (a peak and the start of the softening are what the ply curves of
+the laminate pipeline need).
+
+### Numerical details
 
 Two numerical details matter for real RVEs:
 
@@ -120,6 +175,11 @@ All of these run in the test suite (`tests/test_nonlinear.py`, structured meshes
 |---|---|
 | J2 consistent tangent vs finite differences (yielding points) | agreement to ~1e-10 |
 | J2 uniaxial stress path vs analytical bilinear curve | exact (machine precision) |
+| Paraboloidal model with σc0 = σt0, νp = 0.5 against the J2 return mapping | stresses to 1e-11 |
+| Paraboloidal model, uniaxial tension and compression vs the bilinear curves (σt0, σc0, proportional hardening); plastic Poisson ratio | to 1e-9 |
+| Voce hardening, uniaxial tension and compression (paraboloidal and J2) vs the saturating curve | to 1e-9 |
+| Paraboloidal model with damage: non-symmetric consistent tangent vs finite differences | ~1e-6 relative |
+| Damage: work of a softening point = `G_f / l_e` | to 2e-3 |
 | Homogeneous RVE with cohesive interfaces (stiff), plane strain / GPS / 3D | `sigma/eps = E/(1-nu^2)`, `E`, `E` to 1e-6 |
 | Homogeneous plastic RVE, uniaxial stress, 2D GPS and 3D | analytical bilinear curve to 1e-8 |
 | Full bordered tangent (plasticity + interface softening) vs finite differences | ~1e-9 relative |
@@ -148,7 +208,7 @@ of a finite penalty stiffness.
 matrix, transverse uniaxial tension to 2 %, 6,507 unknowns): initial modulus 7.88 GPa,
 peak 45.0 MPa at 0.70 % strain, then softening to 38.6 MPa with 23 % of the interface fully
 debonded and 13 % of the RVE yielded; 56 increments (three cuts), 331 Newton iterations,
-40 s on 4 CPU cores with the TensorMesh engine.
+42 s on 4 CPU cores with the TensorMesh engine.
 
 Debonding robustness on the same RVE (40 initial increments):
 
@@ -164,7 +224,7 @@ values delay and raise the peak.
 
 `examples/3d/synthetic/nonlinear_cohesive_plastic.yaml` (3D solid, 776 cohesive triangles,
 4,961 unknowns, uniaxial stress to 1.2 %): initial modulus 6.86 GPa, peak 44.0 MPa at
-0.98 % strain; 27 increments, 137 Newton iterations, 59 s.
+0.98 % strain; 27 increments, 137 Newton iterations, 66 s.
 
 ## Julia engine
 
@@ -204,24 +264,28 @@ Both engines take identical increments and Newton iterations on the examples:
 
 Damage, debonded and yielded fractions, equivalent plastic strain and work density agree
 to about 1e-14 as well; `tests/test_julia_nonlinear.py` checks the same parity on a
-structured mesh whenever the Julia environment is set up.
+structured mesh whenever the Julia environment is set up, also with a pressure-dependent,
+damaging matrix and for longitudinal shear on an extruded layer.
 
 ## Performance
 
 Wall time of `rve2d solve-nonlinear` on the example meshes (median of two runs, 4-core
-Xeon at 2.1 GHz, CPU only). Every variant takes the same increments and Newton iterations
+Xeon at 2.8 GHz, CPU only). Every variant takes the same increments and Newton iterations
 and gives the same results; only the speed differs.
 
 | Example | Julia | TensorMesh (default: SciPy SuperLU) | TensorMesh, `linear_solver: tensormesh` |
 |---|---|---|---|
-| 2D (6,507 unknowns, 331 Newton iterations) | 38 s | 40 s | 49 s |
-| 3D (4,961 unknowns, 137 Newton iterations) | 41 s | 59 s | 97 s |
+| 2D (6,507 unknowns, 331 Newton iterations) | 42 s | 42 s | 54 s |
+| 3D (4,961 unknowns, 137 Newton iterations) | 50 s | 66 s | 101 s |
 
 - The TensorMesh engine evaluates all elements at once in PyTorch (on all cores) and
   factorizes with SciPy's SuperLU, which is single-threaded and has more fill-in on 3D
   meshes.
 - The Julia engine runs its own code on one thread (UMFPACK uses 2 BLAS threads) and
-  spends about 4 s starting up; 34 s of its 38 s in 2D are the solve itself.
+  spends about 4 s starting up.
+- With pressure-dependent plasticity or damage the material tangent is not symmetric and
+  each Newton iteration costs a little more on both engines; the laminate pipelines
+  ([laminate.md](laminate.md#performance)) give timings for such matrices.
 - `linear_solver: tensormesh` hands the factorization to SciPy on the CPU and adds
   conversions, so it is the slowest CPU choice; it exists for `device: cuda`, where the
   whole Newton loop stays on the GPU (not measured here).

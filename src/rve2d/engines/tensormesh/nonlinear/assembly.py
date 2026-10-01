@@ -256,12 +256,15 @@ class RVESystem:
                 torch.einsum("eji,ejk->eik", strain_matrix, tangent[:, :, free_macro])
                 * vol[:, None, None]
             )
-            k_ew_elem = (  # [e, j, k] = (C[free_k, :] B)[j]
-                torch.einsum("eki,eij->ejk", tangent[:, free_macro, :], strain_matrix)
-                * vol[:, None, None]
-            )
             k_we = self._reduce_columns(k_we_elem, n_free)  # (n_reduced, n_free)
-            k_ew = self._reduce_columns(k_ew_elem, n_free)  # (n_reduced, n_free), transposed
+            if self.material.symmetric_tangent:
+                k_ew = k_we
+            else:
+                k_ew_elem = (  # [e, j, k] = (C[free_k, :] B)[j]
+                    torch.einsum("eki,eij->ejk", tangent[:, free_macro, :], strain_matrix)
+                    * vol[:, None, None]
+                )
+                k_ew = self._reduce_columns(k_ew_elem, n_free)  # (n_reduced, n_free), transposed
             k_ee = (tangent[:, free_macro][:, :, free_macro] * vol[:, None, None]).sum(dim=0)
             r_idx = torch.arange(self.n_reduced, device=self.device)
             border = self.n_reduced + torch.arange(n_free, device=self.device)

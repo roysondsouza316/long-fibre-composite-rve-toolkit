@@ -232,6 +232,7 @@ def epoxy(
     onset: float | None = None,
     rate: float = 0.0,
     hardening: float = 300.0,
+    saturation: float | None = None,
 ) -> ElementMaterial:
     def full(value: float) -> torch.Tensor:
         return torch.full((n,), value, dtype=F64)
@@ -240,6 +241,7 @@ def epoxy(
         full(3500.0), full(0.35), full(60.0), full(hardening),
         compressive_yield_stress=full(compressive), plastic_poisson_ratio=full(plastic_poisson),
         damage_onset=None if onset is None else full(onset), damage_rate=full(rate),
+        saturation_stress=None if saturation is None else full(saturation),
     )  # fmt: skip
 
 
@@ -298,10 +300,39 @@ def test_paraboloid_yields_at_the_tensile_and_compressive_yield_stress(sign: flo
     assert float(state.equivalent_plastic_strain[0]) == pytest.approx(abs(float(plastic_strain[0])))
 
 
-def test_paraboloid_and_damage_tangent_matches_finite_differences() -> None:
+@pytest.mark.parametrize(
+    ("compressive", "plastic_poisson", "sign"),
+    [(90.0, 0.3, 1.0), (90.0, 0.3, -1.0), (60.0, 0.5, 1.0)],  # the last: J2 with Voce
+)
+def test_voce_hardening_follows_its_curve_and_saturates(
+    compressive: float, plastic_poisson: float, sign: float
+) -> None:
+    youngs, st, hardening, saturation = 3500.0, 60.0, 3000.0, 80.0
+    material = epoxy(
+        compressive=compressive, plastic_poisson=plastic_poisson, hardening=hardening,
+        saturation=saturation,
+    )  # fmt: skip
+    strains = sign * np.linspace(0.0, 0.2, 101)[1:]
+    stresses, eqps, _ = uniaxial_stress_path(material, strains)
+    ratio = 1.0 if sign > 0 else compressive / st  # compression follows tension
+    for strain, stress, plastic in zip(strains, stresses, eqps, strict=True):
+        if plastic > 0.0:
+            voce = saturation - (saturation - st) * math.exp(
+                -hardening * plastic / (saturation - st)
+            )
+            assert abs(stress) == pytest.approx(ratio * voce, rel=1e-9)
+        # the axial strain is the elastic plus the (equivalent) plastic strain
+        assert abs(strain) == pytest.approx(abs(stress) / youngs + plastic, rel=1e-9)
+    assert abs(stresses[-1]) == pytest.approx(ratio * saturation, rel=1e-9)
+
+
+@pytest.mark.parametrize("saturation", [None, 75.0])
+def test_paraboloid_and_damage_tangent_matches_finite_differences(
+    saturation: float | None,
+) -> None:
     torch.manual_seed(0)
     n = 200
-    material = epoxy(n, onset=0.005, rate=20.0)
+    material = epoxy(n, onset=0.005, rate=20.0, saturation=saturation)
     strain = 0.03 * torch.randn(n, 6, dtype=F64)
     state = PlasticState(0.005 * torch.randn(n, 6, dtype=F64), 0.01 * torch.rand(n, dtype=F64))
     _, tangent, new_state, yielding = return_mapping(strain, state, material)

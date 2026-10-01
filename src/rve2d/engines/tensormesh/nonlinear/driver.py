@@ -70,9 +70,13 @@ def phase_material(
     def energy(phase: PhaseMaterialConfig) -> float:
         return 1.0 if phase.fracture_energy is None else phase.fracture_energy
 
+    def saturation(phase: PhaseMaterialConfig) -> float:
+        return float("inf") if phase.saturation_stress is None else phase.saturation_stress
+
     sigma_y, hardening, damage_onset = (
         per_element(yield_stress), per_element(lambda p: p.hardening_modulus), per_element(onset)
     )  # fmt: skip
+    saturation_stress = per_element(saturation)
     lengths = torch.as_tensor(characteristic_lengths(mesh), dtype=torch.float64, device=device)
     enabled = torch.isfinite(damage_onset)
     rate = damage_rate(
@@ -81,6 +85,7 @@ def phase_material(
         hardening,
         torch.where(enabled, damage_onset, torch.zeros_like(damage_onset)),
         per_element(energy),
+        torch.where(enabled, saturation_stress, torch.full_like(sigma_y, float("inf"))),
     )
     return element_material(
         per_element(lambda p: p.youngs_modulus),
@@ -91,6 +96,7 @@ def phase_material(
         plastic_poisson_ratio=per_element(lambda p: p.plastic_poisson_ratio),
         damage_onset=damage_onset,
         damage_rate=torch.where(enabled, rate, torch.zeros_like(rate)),
+        saturation_stress=saturation_stress,
     )
 
 

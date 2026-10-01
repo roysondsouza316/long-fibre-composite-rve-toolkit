@@ -200,7 +200,7 @@ description, units and outputs in [nonlinear.md](nonlinear.md).
 | `engine`             | enum   | `tensormesh`       | `tensormesh` (PyTorch) or `julia` (Ferrite.jl + DiffCohesive.jl, CPU); `--engine` overrides it; `python` is an alias of `tensormesh` |
 | `kinematics`         | enum   | GPS (2D) / `solid` (3D) | 2D: `plane_strain`, `generalized_plane_strain`; 3D: `solid` |
 | `boundary_condition` | enum   | `periodic`         | `periodic` (needs `periodic_compatible: true`) or `dirichlet` |
-| `matrix`, `fibre`    | object | required           | `youngs_modulus`, `poisson_ratio`, optional `yield_stress` (omit: elastic), `hardening_modulus` (default 0) |
+| `matrix`, `fibre`    | object | required           | `youngs_modulus`, `poisson_ratio`, optional `yield_stress` (omit: elastic), `hardening_modulus` (default 0) and the pressure-dependent plasticity and damage keys below |
 | `interface`          | object | none               | Cohesive fibre/matrix interfaces; omit or `enabled: false` for perfect bonding |
 | `load`               | object | see below          | Macro load path                                              |
 | `device`             | enum   | `cpu`              | `cpu` or `cuda` (TensorMesh engine)                          |
@@ -209,6 +209,17 @@ description, units and outputs in [nonlinear.md](nonlinear.md).
 | `max_step_cuts`      | int    | `10`               | Max halvings of an increment before the solve stops          |
 | `output_every`       | int    | `0`                | Write VTU fields every N steps (0: final state only)         |
 | `matrix_phase_id`, `fibre_phase_id` | int | `1` / `2` | gmsh physical ids                                         |
+
+Optional keys of `matrix` and `fibre` (pressure-dependent plasticity and damage, see
+[nonlinear.md](nonlinear.md#matrix-plasticity-and-damage)):
+
+| Field                      | Default        | Notes |
+| -------------------------- | -------------- | ----- |
+| `compressive_yield_stress` | `yield_stress` | Yield stress in uniaxial compression, at least `yield_stress` (paraboloidal criterion when larger) |
+| `plastic_poisson_ratio`    | `0.5`          | Lateral-to-axial plastic strain ratio in [0, 0.5]; 0.5 is isochoric flow (J2 with equal yield stresses); a larger compressive yield stress needs a value below 0.5, e.g. 0.3 |
+| `saturation_stress`        | none           | Voce hardening: the tensile yield stress levels off at this value (above `yield_stress`; `hardening_modulus` is the initial slope); none: linear hardening |
+| `damage_onset_strain`      | none           | Equivalent plastic strain at damage onset; needs `fracture_energy` |
+| `fracture_energy`          | none           | `G_f` per unit crack area [stress x length], regularised with the element size; needs `damage_onset_strain` |
 
 `interface`:
 

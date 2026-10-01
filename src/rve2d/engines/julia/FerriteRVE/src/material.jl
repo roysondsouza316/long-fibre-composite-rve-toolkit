@@ -7,8 +7,10 @@
 #   (uniaxial) plastic strain.
 # * Pressure-dependent paraboloidal plasticity for polymer matrices (Tschoegl 1971; Melro et
 #   al. 2013): `f = q² + 3p(σc - σt) - σc σt` with the current tensile and compressive yield
-#   stresses (linear hardening, compression scaled with tension) and the non-associative
-#   potential `g = q² + α_g p²`, `α_g = 9/2 (1 - 2ν_p) / (1 + ν_p)`.
+#   stresses (compression scaled with tension) and the non-associative potential
+#   `g = q² + α_g p²`, `α_g = 9/2 (1 - 2ν_p) / (1 + ν_p)`.
+# * Hardening: linear, or Voce's saturation `σt = σs - (σs - σt0) exp(-H ε̄ / (σs - σt0))`
+#   towards a finite `saturation_stress` σs (paraboloidal return mapping).
 # * Ductile damage: past `damage_onset` the stress is `(1 - d)` times the effective stress,
 #   `d` linear in the plastic displacement over a crack band one element wide (capped at
 #   MAX_DAMAGE); `d` is a function of the equivalent plastic strain.
@@ -28,15 +30,31 @@ struct PhaseMaterial
     damage_onset::Float64     # equivalent plastic strain at damage onset (Inf: no damage)
     fracture_energy::Float64
     damage_rate::Float64      # d(damage)/d(equivalent plastic strain), per element
+    saturation_stress::Float64  # Voce hardening (Inf: linear hardening)
 end
 
 function PhaseMaterial(; youngs_modulus, poisson_ratio, yield_stress = Inf,
         hardening_modulus = 0.0, compressive_yield_stress = yield_stress,
-        plastic_poisson_ratio = 0.5, damage_onset = Inf, fracture_energy = Inf)
+        plastic_poisson_ratio = 0.5, damage_onset = Inf, fracture_energy = Inf,
+        saturation_stress = Inf)
     G = youngs_modulus / (2 * (1 + poisson_ratio))
     K = youngs_modulus / (3 * (1 - 2 * poisson_ratio))
     return PhaseMaterial(G, K, yield_stress, hardening_modulus, compressive_yield_stress,
-        plastic_poisson_ratio, damage_onset, fracture_energy, 0.0)
+        plastic_poisson_ratio, damage_onset, fracture_energy, 0.0, saturation_stress)
+end
+
+"""
+    tensile_yield_stress(m, eqps) -> (stress, slope)
+
+Current tensile yield stress and its slope: linear hardening, or Voce's saturation towards
+a finite `saturation_stress` with initial slope `hardening_modulus`.
+"""
+function tensile_yield_stress(m::PhaseMaterial, eqps::Float64)
+    H = m.hardening_modulus
+    isfinite(m.saturation_stress) || return m.yield_stress + H * eqps, H
+    span = m.saturation_stress - m.yield_stress
+    decay = exp(-H * eqps / span)
+    return m.saturation_stress - span * decay, H * decay
 end
 
 """
@@ -47,11 +65,11 @@ displacement `2 G_f / σ_onset` (tensile yield stress at onset).
 """
 function with_characteristic_length(m::PhaseMaterial, length::Float64)
     isfinite(m.damage_onset) || return m
-    onset_stress = m.yield_stress + m.hardening_modulus * m.damage_onset
+    onset_stress = tensile_yield_stress(m, m.damage_onset)[1]
     rate = length * onset_stress / (2 * m.fracture_energy)
     return PhaseMaterial(m.shear_modulus, m.bulk_modulus, m.yield_stress, m.hardening_modulus,
         m.compressive_yield_stress, m.plastic_poisson_ratio, m.damage_onset,
-        m.fracture_energy, rate)
+        m.fracture_energy, rate, m.saturation_stress)
 end
 
 "Crack-band width: `sqrt(2A)` of a triangle, `(6V)^(1/3)` of a tetrahedron."
@@ -59,7 +77,7 @@ characteristic_length(volume::Float64, dim::Int) = dim == 2 ? sqrt(2 * volume) :
 
 is_general(m::PhaseMaterial) = isfinite(m.yield_stress) &&
     (m.compressive_yield_stress != m.yield_stress || m.plastic_poisson_ratio != 0.5 ||
-     isfinite(m.damage_onset))
+     isfinite(m.damage_onset) || isfinite(m.saturation_stress))
 
 function bulk_damage(eqps::Float64, m::PhaseMaterial)
     isfinite(m.damage_onset) || return 0.0
@@ -133,9 +151,8 @@ plastic multiplier, then the consistent tangent; the last output is the derivati
 equivalent plastic strain with respect to the strain (for the damage tangent).
 """
 function paraboloid_update(strain::SymmetricTensor{2, 3}, state::PlasticState, m::PhaseMaterial)
-    G, K, Ht = m.shear_modulus, m.bulk_modulus, m.hardening_modulus
-    st0, sc0 = m.yield_stress, m.compressive_yield_stress
-    Hc = Ht * sc0 / st0
+    G, K = m.shear_modulus, m.bulk_modulus
+    ratio = m.compressive_yield_stress / m.yield_stress  # σc follows σt
     νp = m.plastic_poisson_ratio
     α = 4.5 * (1 - 2νp) / (1 + νp)
     keq = 1 / (1 + 2νp^2)
@@ -144,26 +161,31 @@ function paraboloid_update(strain::SymmetricTensor{2, 3}, state::PlasticState, m
     p_trial = K * tr(elastic)
     q_trial = sqrt(1.5 * (s_trial ⊡ s_trial))
     ε̄n = state.equivalent_plastic_strain
-    st_n, sc_n = st0 + Ht * ε̄n, sc0 + Hc * ε̄n
+    st_n = tensile_yield_stress(m, ε̄n)[1]
+    sc_n = ratio * st_n
     f_trial = q_trial^2 + 3 * (sc_n - st_n) * p_trial - sc_n * st_n
     if !(f_trial > 0)
         stress = s_trial + p_trial * IDENTITY
         return stress, K * VOLUMETRIC + 2G * DEVIATORIC, state, false, zero(s_trial)
     end
     function residual(Δλ)
+        # `local`: the enclosing function has its own a, b, q and p, which a closure would
+        # otherwise share (boxed variables make the update type-unstable and slow)
+        local a, b, q, p
         a = 1 + 6G * Δλ
         b = 1 + 2K * α * Δλ
         q, p = q_trial / a, p_trial / b
         mm = sqrt(keq * (6q^2 + (4 / 3) * α^2 * p^2))
         Δε̄ = Δλ * mm
-        st, sc = st_n + Ht * Δε̄, sc_n + Hc * Δε̄
+        st, Ht = tensile_yield_stress(m, ε̄n + Δε̄)
+        sc, Hc = ratio * st, ratio * Ht
         f = q^2 + 3 * (sc - st) * p - sc * st
         dq, dp = -6G * q / a, -2K * α * p / b
         dm = mm > 0 ? keq * (6q * dq + (4 / 3) * α^2 * p * dp) / mm : 0.0
         dΔε̄ = mm + Δλ * dm
         dst, dsc = Ht * dΔε̄, Hc * dΔε̄
         df = 2q * dq + 3 * (dsc - dst) * p + 3 * (sc - st) * dp - dsc * st - sc * dst
-        return (; a, b, q, p, mm, Δε̄, st, sc, f, df, dΔε̄)
+        return (; a, b, q, p, mm, Δε̄, st, sc, Ht, Hc, f, df, dΔε̄)
     end
     # Safeguarded Newton: f(0) > 0 and f -> -σc σt < 0 as Δλ grows.
     Δλ, low, high, first = 0.0, 0.0, Inf, Inf
@@ -192,7 +214,7 @@ function paraboloid_update(strain::SymmetricTensor{2, 3}, state::PlasticState, m
     plastic = state.plastic_strain + Δλ * (3s + (2α * p / 3) * IDENTITY)
     new_state = PlasticState(plastic, ε̄n + r.Δε̄)
     # Consistent tangent: dσ̃ = C_iso dε - v dΔλ with dΔλ = -(F_ε ⊡ dε) / f'(Δλ).
-    φ = 3 * (Hc - Ht) * p - Hc * r.st - r.sc * Ht
+    φ = 3 * (r.Hc - r.Ht) * p - r.Hc * r.st - r.sc * r.Ht
     safe_m = r.mm > 0 ? r.mm : 1.0
     dε̄_dq = Δλ * keq * 6q / safe_m / a
     dε̄_dp = Δλ * keq * (4 / 3) * α^2 * p / safe_m / b

@@ -219,7 +219,8 @@ class PhaseMaterialConfig:
     ``compressive_yield_stress`` the pressure-dependent paraboloidal surface of polymer
     matrices (Tschoegl; Melro et al. 2013) with non-associative flow set by
     ``plastic_poisson_ratio`` (0.5: no plastic volume change). ``hardening_modulus`` is the
-    linear hardening in tension (compression scales with it). Ductile damage (with
+    hardening in tension (compression scales with it): linear, or with ``saturation_stress``
+    the initial slope of Voce's saturating curve towards that stress. Ductile damage (with
     ``damage_onset_strain`` and ``fracture_energy``): beyond that equivalent plastic strain the
     stiffness degrades with the plastic displacement over one element (crack band), so that
     a crack dissipates about ``fracture_energy`` per unit area.
@@ -233,6 +234,7 @@ class PhaseMaterialConfig:
     plastic_poisson_ratio: float = 0.5
     damage_onset_strain: float | None = None
     fracture_energy: float | None = None
+    saturation_stress: float | None = None
 
 
 @dataclass(frozen=True)
@@ -786,14 +788,22 @@ def _validate_phase_plasticity(phase: PhaseMaterialConfig, label: str) -> None:
         or phase.plastic_poisson_ratio != 0.5
         or phase.damage_onset_strain is not None
         or phase.fracture_energy is not None
+        or phase.saturation_stress is not None
     )
     if phase.yield_stress is None:
         if extras:
             raise ConfigError(
-                f"{label}: compressive_yield_stress, plastic_poisson_ratio and damage need a "
-                "yield_stress."
+                f"{label}: compressive_yield_stress, plastic_poisson_ratio, saturation_stress "
+                "and damage need a yield_stress."
             )
         return
+    if phase.saturation_stress is not None and (
+        phase.saturation_stress <= phase.yield_stress or phase.hardening_modulus <= 0.0
+    ):
+        raise ConfigError(
+            f"{label}.saturation_stress must exceed yield_stress, with a positive "
+            "hardening_modulus (the initial slope of the Voce curve)."
+        )
     compressive = phase.compressive_yield_stress
     if compressive is not None and compressive < phase.yield_stress:
         raise ConfigError(f"{label}.compressive_yield_stress must be at least yield_stress.")

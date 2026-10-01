@@ -13,12 +13,17 @@ Two return mappings, both with their consistent (algorithmic) tangents:
 * **Pressure-dependent (paraboloidal)** plasticity for polymer matrices (Tschoegl 1971; Melro
   et al., Int. J. Solids Struct. 50, 2013): yield function
   ``f = q^2 + 3 p (sigma_c - sigma_t) - sigma_c sigma_t`` with von Mises stress ``q``, mean
-  stress ``p`` and the current tensile and compressive yield stresses (linear hardening, the
-  compressive one scaled with the tensile one), and the non-associative flow potential
+  stress ``p`` and the current tensile and compressive yield stresses (the compressive one
+  scaled with the tensile one), and the non-associative flow potential
   ``g = q^2 + alpha_g p^2``, ``alpha_g = 9/2 (1 - 2 nu_p) / (1 + nu_p)`` for the plastic
   Poisson ratio ``nu_p``. With equal yield stresses and ``nu_p = 1/2`` it is J2. The
   equivalent plastic strain rate ``sqrt(eps_p : eps_p / (1 + 2 nu_p^2))`` equals the axial
   plastic strain rate in uniaxial tension.
+
+Hardening is linear (``sigma_t = sigma_t0 + H alpha``) or, with a ``saturation_stress``
+``sigma_s``, of Voce's saturating form ``sigma_t = sigma_s - (sigma_s - sigma_t0)
+exp(-H alpha / (sigma_s - sigma_t0))`` (initial slope ``H``); Voce phases use the second
+return mapping, which handles any hardening curve.
 
 Ductile damage (optional): once the equivalent plastic strain exceeds ``damage_onset`` the
 stress is ``(1 - d)`` times the effective (plastic) stress, with ``d`` growing linearly with
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import cached_property
 
 import torch
 
@@ -55,8 +61,9 @@ class ElementMaterial:
     plastic_poisson_ratio: torch.Tensor  # 0.5: isochoric plastic flow
     damage_onset: torch.Tensor  # equivalent plastic strain at damage onset (+inf: no damage)
     damage_rate: torch.Tensor  # d(damage) / d(equivalent plastic strain) after onset
+    saturation_stress: torch.Tensor  # Voce hardening (+inf: linear hardening)
 
-    @property
+    @cached_property
     def general(self) -> torch.Tensor:
         """Elements that need the paraboloidal return mapping (otherwise J2 or elastic)."""
         plastic = torch.isfinite(self.yield_stress)
@@ -64,7 +71,13 @@ class ElementMaterial:
             (self.compressive_yield_stress != self.yield_stress)
             | (self.plastic_poisson_ratio != 0.5)
             | torch.isfinite(self.damage_onset)
+            | torch.isfinite(self.saturation_stress)
         )
+
+    @cached_property
+    def symmetric_tangent(self) -> bool:
+        """True when every element's consistent tangent is symmetric (J2 or elastic)."""
+        return not bool(self.general.any())
 
 
 @dataclass(frozen=True)
@@ -82,6 +95,7 @@ def element_material(
     plastic_poisson_ratio: torch.Tensor | None = None,
     damage_onset: torch.Tensor | None = None,
     damage_rate: torch.Tensor | None = None,
+    saturation_stress: torch.Tensor | None = None,
 ) -> ElementMaterial:
     shear = youngs_modulus / (2.0 * (1.0 + poisson_ratio))
     bulk = youngs_modulus / (3.0 * (1.0 - 2.0 * poisson_ratio))
@@ -96,7 +110,27 @@ def element_material(
         else plastic_poisson_ratio,
         torch.full_like(yield_stress, math.inf) if damage_onset is None else damage_onset,
         torch.zeros_like(yield_stress) if damage_rate is None else damage_rate,
+        torch.full_like(yield_stress, math.inf) if saturation_stress is None else saturation_stress,
     )
+
+
+def tensile_yield_stress(
+    equivalent_plastic_strain: torch.Tensor,
+    yield_stress: torch.Tensor,
+    hardening_modulus: torch.Tensor,
+    saturation_stress: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Current tensile yield stress and its slope: linear hardening, or Voce's saturation
+    towards a finite ``saturation_stress`` with initial slope ``hardening_modulus``."""
+    voce = torch.isfinite(saturation_stress)
+    span = torch.where(voce, saturation_stress - yield_stress, torch.ones_like(yield_stress))
+    decay = torch.exp(-hardening_modulus * equivalent_plastic_strain / span)
+    stress = torch.where(
+        voce,
+        saturation_stress - span * decay,
+        yield_stress + hardening_modulus * equivalent_plastic_strain,
+    )
+    return stress, torch.where(voce, hardening_modulus * decay, hardening_modulus)
 
 
 def damage_rate(
@@ -105,11 +139,16 @@ def damage_rate(
     hardening_modulus: torch.Tensor,
     damage_onset: torch.Tensor,
     fracture_energy: torch.Tensor,
+    saturation_stress: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Damage per unit equivalent plastic strain for linear softening in the plastic
     displacement over a crack band of width ``characteristic_length``: ``d`` reaches 1 at the
     plastic displacement ``2 G_f / sigma_onset`` (the tensile yield stress at onset)."""
-    onset_stress = yield_stress + hardening_modulus * damage_onset
+    if saturation_stress is None:
+        saturation_stress = torch.full_like(yield_stress, math.inf)
+    onset_stress, _ = tensile_yield_stress(
+        damage_onset, yield_stress, hardening_modulus, saturation_stress
+    )
     return characteristic_length * onset_stress / (2.0 * fracture_energy)
 
 
@@ -188,9 +227,9 @@ def return_mapping(
     """``(stress, consistent_tangent, new_state, yielding)``: J2 (or elastic) for most
     elements, the paraboloidal return mapping with damage where the material needs it."""
     stress, tangent, new_state, yielding = j2_return_mapping(strain, state, material)
-    general = material.general
-    if not bool(general.any()):
+    if material.symmetric_tangent:
         return stress, tangent, new_state, yielding
+    general = material.general
     idx = torch.nonzero(general).squeeze(1)
     sub = ElementMaterial(*(getattr(material, name)[idx] for name in _MATERIAL_FIELDS))
     sub_state = PlasticState(state.plastic_strain[idx], state.equivalent_plastic_strain[idx])
@@ -226,6 +265,7 @@ _MATERIAL_FIELDS = (
     "plastic_poisson_ratio",
     "damage_onset",
     "damage_rate",
+    "saturation_stress",
 )
 _ROOT_TOLERANCE = 1e-14  # |f| relative to sigma_c * sigma_t
 _ROOT_ITERATIONS = 100
@@ -242,8 +282,13 @@ def paraboloid_return_mapping(
     """
     mu, kappa = material.shear_modulus, material.bulk_modulus
     st0, sc0 = material.yield_stress, material.compressive_yield_stress
-    h_t = material.hardening_modulus
-    h_c = h_t * sc0 / st0
+    ratio = sc0 / st0  # the compressive yield stress follows the tensile one
+
+    def hardening(eqps: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return tensile_yield_stress(
+            eqps, st0, material.hardening_modulus, material.saturation_stress
+        )
+
     nu_p = material.plastic_poisson_ratio
     alpha = 4.5 * (1.0 - 2.0 * nu_p) / (1.0 + nu_p)
     k_eq = 1.0 / (1.0 + 2.0 * nu_p**2)
@@ -257,8 +302,8 @@ def paraboloid_return_mapping(
         1.5 * (s_trial[:, :3] ** 2).sum(dim=1) + 3.0 * (s_trial[:, 3:] ** 2).sum(dim=1)
     )
     eqps_n = state.equivalent_plastic_strain
-    st_n = st0 + h_t * eqps_n
-    sc_n = sc0 + h_c * eqps_n
+    st_n, _ = hardening(eqps_n)
+    sc_n = ratio * st_n
     f_trial = q_trial**2 + 3.0 * (sc_n - st_n) * p_trial - sc_n * st_n
     yielding = f_trial > 0.0
 
@@ -269,7 +314,8 @@ def paraboloid_return_mapping(
         m = torch.sqrt(k_eq * (6.0 * q**2 + (4.0 / 3.0) * alpha**2 * p**2))
         safe_m = torch.where(m > 0.0, m, torch.ones_like(m))
         deqps = dlam * m
-        st, sc = st_n + h_t * deqps, sc_n + h_c * deqps
+        st, h_t = hardening(eqps_n + deqps)
+        sc, h_c = ratio * st, ratio * h_t
         f = q**2 + 3.0 * (sc - st) * p - sc * st
         dq, dp = -6.0 * mu * q / a, -2.0 * kappa * alpha * p / b
         dm = torch.where(
@@ -279,7 +325,8 @@ def paraboloid_return_mapping(
         dst, dsc = h_t * ddeqps, h_c * ddeqps
         df = 2.0 * q * dq + 3.0 * (dsc - dst) * p + 3.0 * (sc - st) * dp - dsc * st - sc * dst
         return {"a": a, "b": b, "q": q, "p": p, "m": m, "safe_m": safe_m, "deqps": deqps,
-                "st": st, "sc": sc, "f": f, "df": df, "ddeqps": ddeqps}  # fmt: skip
+                "st": st, "sc": sc, "h_t": h_t, "h_c": h_c, "f": f, "df": df,
+                "ddeqps": ddeqps}  # fmt: skip
 
     # Safeguarded Newton on the plastic multiplier: f(0) > 0 and f -> -sc st < 0 as dlam grows.
     dlam = torch.zeros_like(q_trial)
@@ -318,6 +365,7 @@ def paraboloid_return_mapping(
     eqps = eqps_n + r["deqps"]
 
     # Consistent tangent: d(effective) = C_iso de - v d(dlam), d(dlam) = -F_e de / f'(dlam).
+    h_t, h_c = r["h_t"], r["h_c"]
     phi = 3.0 * (h_c - h_t) * p - h_c * r["st"] - r["sc"] * h_t
     deqps_dq = dlam * k_eq * 6.0 * q / r["safe_m"] / a
     deqps_dp = dlam * k_eq * (4.0 / 3.0) * alpha**2 * p / r["safe_m"] / b
