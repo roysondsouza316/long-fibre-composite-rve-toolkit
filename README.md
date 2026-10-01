@@ -408,7 +408,8 @@ laminate:
 
 To try other stacking sequences, edit the list and rerun with `--ply
 OUTPUT/ply/ply_properties.json`: the RVE is not solved again and the laminates take
-seconds. Ready-made pipelines for both engines are in
+about 10 s (the 2D tensile pipeline takes about 5 minutes on 4 cores, mostly the two RVE
+curves). Ready-made pipelines for both engines are in
 [`examples/pipelines/`](examples/pipelines/); the formulation and its checks are in
 [`docs/laminate.md`](docs/laminate.md).
 

@@ -221,6 +221,30 @@ All of these run in the test suite:
 On the example pipelines the two engines give the same ply stiffness to 4e-16 and the same
 laminate constants to 3e-15.
 
+## Performance
+
+Wall time of `rve2d laminate` on the example pipelines (4-core Xeon at 2.1 GHz, one run at a
+time; Julia times include about 4 s of start-up per solve):
+
+| Config | TensorMesh | Julia |
+|---|---|---|
+| `laminate_stiffness_2d.yaml` (linear solve with 8,676 unknowns, 7 laminates) | 1.6 s | 4.3 s |
+| `laminate_stiffness_3d.yaml` (linear solve with 3,792 unknowns, 7 laminates) | 2.1 s | 4.9 s |
+| `laminate_tensile_2d.yaml` | 284 s | 286 s |
+| — transverse curve, 2D (6,507 unknowns, 108 increments, 609 Newton iterations) | 79 s | 73 s |
+| — shear curve, extruded layer (9,761 unknowns, 86 increments, 436 iterations) | 189 s | 197 s |
+| `laminate_tensile_3d.yaml` | 381 s | 269 s |
+| — transverse curve (4,961 unknowns, 68 increments, 392 iterations) | 202 s | 138 s |
+| — shear curve (61 increments, 315 iterations) | 162 s | 114 s |
+
+The laminates themselves (five tensile tests of 300 steps and the plot) take about 10 s,
+which is also the time of a rerun with `--ply`. Both engines take the same increments and
+Newton iterations; the ply curves agree to 5e-13 and the laminate results to 4e-15.
+
+Meshing the 2D example's shear problem as a 3D slab with gmsh instead (28,000 tetrahedra,
+37,000 unknowns) had not finished its shear curve after 17 minutes, which is why the
+pipeline uses the extruded layer.
+
 ## Outputs
 
 ```

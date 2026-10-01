@@ -64,8 +64,8 @@ laminate:
   enabled: true
   ply_thickness: 0.125        # mm
   stacking_sequences: ["[0]8", "[90]8", "[0/90]2s", "[±45]2s", "[0/±45/90]s"]
-  longitudinal_tensile_strength: 750.0      # MPa; fibre failure is an input, not modelled
-  longitudinal_compressive_strength: 500.0
+  longitudinal_tensile_strength: 600.0      # MPa (Vf 0.29); fibre failure is an input
+  longitudinal_compressive_strength: 400.0
   transverse_max_strain: 0.03               # cover the ply strains of the test
   shear_max_strain: 0.08
   curve_steps: 40

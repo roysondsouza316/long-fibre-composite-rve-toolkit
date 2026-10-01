@@ -113,5 +113,5 @@ def test_rising_curves_and_curve_ends_are_reported() -> None:
     summary = result.summary()
     assert summary["first_transverse_damage"] is None  # no peak inside a rising curve
     assert summary["first_curve_exceeded"]["event"] == "transverse curve exceeded"
-    assert summary["first_curve_exceeded"]["strain"] == pytest.approx(0.02, abs=1e-3)
+    assert summary["first_curve_exceeded"]["strain"] == pytest.approx(0.021)  # first step past 2 %
     assert result.stress[-1] == pytest.approx(50.0)  # held at the last value of the curve

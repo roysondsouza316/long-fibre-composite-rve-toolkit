@@ -359,7 +359,8 @@ def tensile_test(
             ):
                 if curve is None:
                     continue
-                checks = [(f"{mode} curve exceeded", curve.max_strain)]
+                # (a relative tolerance keeps round-off at the end of a curve from counting)
+                checks = [(f"{mode} curve exceeded", curve.max_strain * (1.0 + 1e-6))]
                 if curve.strain_at_peak < curve.max_strain:  # the curve has a peak
                     checks.insert(0, (f"{mode} peak passed", curve.strain_at_peak))
                 for event, limit in checks:
