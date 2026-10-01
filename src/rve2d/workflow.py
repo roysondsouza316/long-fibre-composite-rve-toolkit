@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rve2d.config import RVEConfig
@@ -17,6 +17,7 @@ from rve2d.meshing.gmsh_builder import build_mesh_with_gmsh
 from rve2d.models import GeometryModel
 from rve2d.synthetic_generation.circular import generate_circular_fibre_rve
 from rve2d.synthetic_generation.cylindrical import generate_cylindrical_fibre_rve
+from rve2d.synthetic_generation.packing import mesh_compatibility_warnings
 from rve2d.synthetic_generation.sem_image import generate_circular_fibre_rve_from_sem
 from rve2d.validation.checks import QualityReport, validate_geometry
 
@@ -38,16 +39,17 @@ def build_rve(
     basename: str | None = None,
 ) -> BuildResult:
     geometry, removed_artifacts = _build_geometry(config)
-    minimum_spacing_requirement = (
-        config.synthetic.min_spacing
-        if config.mode == "synthetic" and config.synthetic is not None
-        else 0.0
-    )
+    synthetic = config.synthetic if config.mode == "synthetic" else None
     quality_report = validate_geometry(
         geometry,
-        minimum_spacing_requirement=minimum_spacing_requirement,
-        disconnected_artifacts=removed_artifacts,
+        minimum_spacing_requirement=synthetic.min_spacing if synthetic is not None else 0.0,
+        removed_artifacts=removed_artifacts,
+        element_size=config.mesh.element_size_min,
     )
+    if synthetic is not None:
+        # Gaps the packing may leave that the mesh cannot resolve (sliver elements).
+        notes = [*quality_report.notes, *mesh_compatibility_warnings(synthetic, config.mesh)]
+        quality_report = replace(quality_report, notes=notes)
 
     export_dir = Path(output_dir or config.export.output_dir)
     mesh_basename = basename or config.export.basename

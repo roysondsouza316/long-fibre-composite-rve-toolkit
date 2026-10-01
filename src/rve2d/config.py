@@ -13,6 +13,41 @@ from rve2d.exceptions import ConfigError
 
 @dataclass(frozen=True)
 class SyntheticGenerationConfig:
+    """Random circular (2D) or cylindrical (3D, fibres along z) fibre arrangement.
+
+    Placement options:
+
+    ``packing_algorithm``
+        ``"random_sequential"`` (default) draws random centres one at a time and rejects
+        overlapping ones (``max_attempts`` draws at most). It is the historical algorithm and
+        reproduces earlier geometries for the same ``random_seed``, but it saturates around a
+        fibre volume fraction of 0.45-0.5. ``"relaxation"`` places all fibres at random and
+        then iteratively pushes apart every pair closer than ``2 * fibre_radius +
+        min_spacing`` (periodic minimum-image distances when ``periodic_wrapping`` is on),
+        followed by ``shake_sweeps`` Monte Carlo sweeps that randomise the contact network.
+        It reaches volume fractions of 0.60-0.65 and above in about a second for a few
+        hundred fibres. It requires ``min_spacing > 0`` because many fibre pairs end up
+        exactly ``min_spacing`` apart.
+    ``periodic_wrapping``
+        Only with ``periodic_compatible: true``. Fibres may cross the domain boundary; each
+        crossing fibre is stored together with its periodic images (same ``fibre_id``) and the
+        mesher keeps the parts inside the domain. This removes the matrix-only band along the
+        domain edges; ``edge_clearance`` is ignored.
+    ``boundary_clearance``
+        Minimum distance between a fibre surface and a domain face (or, with wrapping, a
+        domain corner) that would otherwise produce sliver elements. With wrapping, a fibre
+        either crosses a face by at least this much or stays at least this far away from it.
+        Without wrapping it is a lower bound for the fibre-to-face gap, combined with
+        ``edge_clearance`` by taking the larger value. ``None`` (default) selects
+        ``max(min_spacing, 0.1 * fibre_radius)`` for wrapping or relaxation layouts and leaves
+        the legacy random-sequential layout untouched. Choose about one mesh element size
+        (``mesh.element_size_min``) or more.
+    ``max_relaxation_iterations``
+        Iteration cap of the relaxation algorithm before it reports failure.
+    ``shake_sweeps``
+        Monte Carlo sweeps after relaxation (0 disables them).
+    """
+
     domain_width: float
     domain_height: float
     fibre_radius: float
@@ -31,6 +66,11 @@ class SyntheticGenerationConfig:
     fibre_orientation_angle_x_deg: float | None = None
     fibre_orientation_angle_y_deg: float | None = None
     fibre_orientation_angle_z_deg: float | None = None
+    packing_algorithm: Literal["random_sequential", "relaxation"] = "random_sequential"
+    periodic_wrapping: bool = False
+    boundary_clearance: float | None = None
+    max_relaxation_iterations: int = 20_000
+    shake_sweeps: int = 20
 
 
 @dataclass(frozen=True)
@@ -336,6 +376,40 @@ def _validate_synthetic(config: SyntheticGenerationConfig, dimension: int) -> No
         raise ConfigError("Spacing and edge clearance must be non-negative.")
     if config.max_attempts <= 0:
         raise ConfigError("max_attempts must be positive.")
+    if config.packing_algorithm not in {"random_sequential", "relaxation"}:
+        raise ConfigError(
+            "synthetic packing_algorithm must be 'random_sequential' or 'relaxation'."
+        )
+    if not isinstance(config.periodic_wrapping, bool):
+        raise ConfigError("synthetic periodic_wrapping must be true or false.")
+    if config.max_relaxation_iterations <= 0:
+        raise ConfigError("max_relaxation_iterations must be positive.")
+    if config.shake_sweeps < 0:
+        raise ConfigError("shake_sweeps must be non-negative.")
+    if config.boundary_clearance is not None and config.boundary_clearance < 0.0:
+        raise ConfigError("boundary_clearance must be non-negative.")
+    if config.packing_algorithm == "relaxation" and config.min_spacing <= 0.0:
+        raise ConfigError(
+            "packing_algorithm 'relaxation' leaves many fibre pairs exactly min_spacing apart, "
+            "so it requires min_spacing > 0 (about one mesh element, see "
+            "mesh.element_size_min); touching fibres cannot be meshed."
+        )
+    if config.periodic_wrapping:
+        if not config.periodic_compatible:
+            raise ConfigError("periodic_wrapping requires periodic_compatible: true.")
+        contact_distance = 2.0 * config.fibre_radius + config.min_spacing
+        if min(config.domain_width, config.domain_height) < 2.0 * contact_distance:
+            raise ConfigError(
+                "periodic_wrapping requires domain_width and domain_height of at least "
+                "2 * (2 * fibre_radius + min_spacing) so that periodic images are unambiguous."
+            )
+        if (
+            config.boundary_clearance is not None
+            and config.boundary_clearance >= config.fibre_radius
+        ):
+            raise ConfigError(
+                "With periodic_wrapping, boundary_clearance must be smaller than fibre_radius."
+            )
 
 
 def _validate_image(config: ImageImportConfig, dimension: int) -> None:

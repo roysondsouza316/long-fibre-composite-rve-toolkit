@@ -4,15 +4,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from rve2d.config import MeshConfig
 from rve2d.exceptions import MeshingError
 from rve2d.models import (
+    Domain,
     Domain2D,
     Domain3D,
-    ExtrudedPolygonFibre,
+    FloatArray,
     GeometryModel,
-    PolygonFibre,
+    PeriodicBoundaryPair,
 )
+
+# OpenCASCADE enlarges bounding boxes by its confusion tolerance (1e-7, absolute); geometric
+# comparisons below never use a tolerance smaller than a few times that value.
+_OCC_CONFUSION = 1e-7
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,15 @@ def build_mesh_with_gmsh(
     mesh_config: MeshConfig,
     output_path: str | Path,
 ) -> MeshBuildResult:
+    """Mesh the matrix and the fibre phase of ``geometry`` with gmsh (OpenCASCADE kernel).
+
+    Fibres are clipped to the domain: the domain is fragmented with all fibre shapes, so the
+    fibre/matrix interfaces are conforming (shared nodes), and fibre parts outside the domain
+    are discarded. Periodic images of wrapped fibres therefore contribute exactly the part of
+    the fibre that lies inside the domain. For periodic geometries the boundary pieces of
+    opposite faces are paired geometrically and meshed with ``setPeriodic``, which makes the
+    boundary meshes node-matched.
+    """
     try:
         import gmsh
     except ImportError as exc:
@@ -92,16 +108,25 @@ def _build_2d_model(
     geometry: GeometryModel,
 ) -> tuple[list[int], list[int], dict[str, list[int]], int, int]:
     assert isinstance(geometry.domain, Domain2D)
+    domain = geometry.domain
+    tolerance = _geometry_tolerance(domain)
     rect_tag = gmsh.model.occ.addRectangle(
-        geometry.domain.origin_x,
-        geometry.domain.origin_y,
+        domain.origin_x,
+        domain.origin_y,
         0.0,
-        geometry.domain.width,
-        geometry.domain.height,
+        domain.width,
+        domain.height,
     )
 
     fibre_surfaces: list[tuple[int, int]] = []
     for fibre in geometry.circular_fibres:
+        if not _overlaps_domain(
+            (fibre.center_x - fibre.radius, fibre.center_y - fibre.radius),
+            (fibre.center_x + fibre.radius, fibre.center_y + fibre.radius),
+            domain,
+            tolerance,
+        ):
+            continue
         disk_tag = gmsh.model.occ.addDisk(
             fibre.center_x,
             fibre.center_y,
@@ -112,20 +137,15 @@ def _build_2d_model(
         fibre_surfaces.append((2, disk_tag))
 
     for polygon_fibre in geometry.polygonal_fibres:
-        surface_tag = _add_polygon_surface(gmsh, polygon_fibre)
+        points = _polygon_vertices(polygon_fibre.points, tolerance)
+        if points.shape[0] < 3 or not _overlaps_domain(
+            tuple(points.min(axis=0)), tuple(points.max(axis=0)), domain, tolerance
+        ):
+            continue
+        surface_tag = _add_polygon_surface(gmsh, points, 0.0)
         fibre_surfaces.append((2, surface_tag))
 
-    matrix_result, _ = gmsh.model.occ.cut(
-        [(2, rect_tag)],
-        fibre_surfaces,
-        removeObject=True,
-        removeTool=False,
-    )
-    gmsh.model.occ.synchronize()
-    matrix_tags = [tag for dim, tag in matrix_result if dim == 2]
-    fibre_tags = [tag for dim, tag in fibre_surfaces if dim == 2]
-    if not matrix_tags:
-        raise MeshingError("gmsh did not return a matrix surface after boolean cut.")
+    matrix_tags, fibre_tags = _fragment_and_clip(gmsh, (2, rect_tag), fibre_surfaces)
     boundary_entities = _classify_outer_boundaries_2d(gmsh, geometry)
     return matrix_tags, fibre_tags, boundary_entities, 1, 2
 
@@ -135,17 +155,26 @@ def _build_3d_model(
     geometry: GeometryModel,
 ) -> tuple[list[int], list[int], dict[str, list[int]], int, int]:
     assert isinstance(geometry.domain, Domain3D)
+    domain = geometry.domain
+    tolerance = _geometry_tolerance(domain)
     box_tag = gmsh.model.occ.addBox(
-        geometry.domain.origin_x,
-        geometry.domain.origin_y,
-        geometry.domain.origin_z,
-        geometry.domain.width,
-        geometry.domain.height,
-        geometry.domain.depth,
+        domain.origin_x,
+        domain.origin_y,
+        domain.origin_z,
+        domain.width,
+        domain.height,
+        domain.depth,
     )
 
     fibre_volumes: list[tuple[int, int]] = []
     for fibre in geometry.cylindrical_fibres:
+        if not _overlaps_domain(
+            (fibre.center_x - fibre.radius, fibre.center_y - fibre.radius, fibre.z_min),
+            (fibre.center_x + fibre.radius, fibre.center_y + fibre.radius, fibre.z_max),
+            domain,
+            tolerance,
+        ):
+            continue
         cylinder_tag = gmsh.model.occ.addCylinder(
             fibre.center_x,
             fibre.center_y,
@@ -158,29 +187,110 @@ def _build_3d_model(
         fibre_volumes.append((3, cylinder_tag))
 
     for polygon_fibre in geometry.extruded_polygonal_fibres:
-        volume_tag = _add_extruded_polygon_volume(gmsh, polygon_fibre)
+        points = _polygon_vertices(polygon_fibre.points, tolerance)
+        if points.shape[0] < 3 or not _overlaps_domain(
+            (*points.min(axis=0), polygon_fibre.z_min),
+            (*points.max(axis=0), polygon_fibre.z_max),
+            domain,
+            tolerance,
+        ):
+            continue
+        volume_tag = _add_extruded_polygon_volume(
+            gmsh, points, polygon_fibre.z_min, polygon_fibre.z_max
+        )
         fibre_volumes.append((3, volume_tag))
 
-    matrix_result, _ = gmsh.model.occ.cut(
-        [(3, box_tag)],
-        fibre_volumes,
-        removeObject=True,
-        removeTool=False,
-    )
-    gmsh.model.occ.synchronize()
-    matrix_tags = [tag for dim, tag in matrix_result if dim == 3]
-    fibre_tags = [tag for dim, tag in fibre_volumes if dim == 3]
-    if not matrix_tags:
-        raise MeshingError("gmsh did not return a matrix volume after boolean cut.")
+    matrix_tags, fibre_tags = _fragment_and_clip(gmsh, (3, box_tag), fibre_volumes)
     boundary_entities = _classify_outer_boundaries_3d(gmsh, geometry)
     return matrix_tags, fibre_tags, boundary_entities, 2, 3
 
 
-def _add_polygon_surface(gmsh: Any, polygon_fibre: PolygonFibre) -> int:
-    point_tags: list[int] = []
-    mesh_size = 0.0
-    for point in polygon_fibre.points[:-1]:
-        point_tags.append(gmsh.model.occ.addPoint(float(point[0]), float(point[1]), 0.0, mesh_size))
+def _fragment_and_clip(
+    gmsh: Any,
+    domain_dimtag: tuple[int, int],
+    fibre_dimtags: list[tuple[int, int]],
+) -> tuple[list[int], list[int]]:
+    """Fragment the domain with the fibres and drop every fibre piece outside the domain.
+
+    Fragmenting (rather than cutting the fibres out of the domain) yields one shared boundary
+    entity per fibre/matrix interface, so the mesh is conforming, and splits fibres that cross
+    the domain boundary into an inside and an outside part. A piece belongs to the fibre phase
+    if it comes from both the domain and a fibre, to the matrix if it comes from the domain
+    only, and is removed if it comes from fibres only.
+    """
+    dim = domain_dimtag[0]
+    if not fibre_dimtags:
+        gmsh.model.occ.synchronize()
+        return [domain_dimtag[1]], []
+    _, result_map = gmsh.model.occ.fragment([domain_dimtag], fibre_dimtags)
+    domain_pieces = {tag for piece_dim, tag in result_map[0] if piece_dim == dim}
+    fibre_pieces = {
+        tag for pieces in result_map[1:] for piece_dim, tag in pieces if piece_dim == dim
+    }
+    outside_pieces = sorted(fibre_pieces - domain_pieces)
+    if outside_pieces:
+        gmsh.model.occ.remove([(dim, tag) for tag in outside_pieces], recursive=True)
+    gmsh.model.occ.synchronize()
+    matrix_tags = sorted(domain_pieces - fibre_pieces)
+    fibre_tags = sorted(domain_pieces & fibre_pieces)
+    if not matrix_tags:
+        kind = "surface" if dim == 2 else "volume"
+        raise MeshingError(f"gmsh did not return a matrix {kind} after fragmenting the domain.")
+    return matrix_tags, fibre_tags
+
+
+def _geometry_tolerance(domain: Domain) -> float:
+    if isinstance(domain, Domain2D):
+        size = min(domain.width, domain.height)
+    else:
+        size = min(domain.width, domain.height, domain.depth)
+    return max(1e-9, size * 1e-6, 10.0 * _OCC_CONFUSION)
+
+
+def _overlaps_domain(
+    lower: tuple[float, ...],
+    upper: tuple[float, ...],
+    domain: Domain,
+    tolerance: float,
+) -> bool:
+    """True when a fibre bounding box overlaps the domain by more than ``tolerance``.
+
+    Fibres entirely outside the domain (or merely touching it) are skipped before the boolean
+    operation.
+    """
+    if isinstance(domain, Domain2D):
+        domain_lower: tuple[float, ...] = (domain.origin_x, domain.origin_y)
+        domain_upper: tuple[float, ...] = (domain.x_max, domain.y_max)
+    else:
+        domain_lower = (domain.origin_x, domain.origin_y, domain.origin_z)
+        domain_upper = (domain.x_max, domain.y_max, domain.z_max)
+    for low, high, domain_low, domain_high in zip(
+        lower, upper, domain_lower, domain_upper, strict=True
+    ):
+        if min(high, domain_high) - max(low, domain_low) <= tolerance:
+            return False
+    return True
+
+
+def _polygon_vertices(points: FloatArray, tolerance: float) -> FloatArray:
+    """Open polygon vertex list without the closing point and without repeated vertices."""
+    vertices = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if vertices.shape[0] == 0:
+        return vertices
+    keep = [0]
+    for index in range(1, vertices.shape[0]):
+        if float(np.max(np.abs(vertices[index] - vertices[keep[-1]]))) > tolerance:
+            keep.append(index)
+    vertices = vertices[keep]
+    while vertices.shape[0] > 1 and float(np.max(np.abs(vertices[-1] - vertices[0]))) <= tolerance:
+        vertices = vertices[:-1]
+    return vertices
+
+
+def _add_polygon_surface(gmsh: Any, points: FloatArray, z: float) -> int:
+    point_tags = [
+        gmsh.model.occ.addPoint(float(point[0]), float(point[1]), z) for point in points
+    ]
     line_tags: list[int] = []
     for index in range(len(point_tags)):
         start = point_tags[index]
@@ -190,29 +300,14 @@ def _add_polygon_surface(gmsh: Any, polygon_fibre: PolygonFibre) -> int:
     return int(gmsh.model.occ.addPlaneSurface([loop]))
 
 
-def _add_extruded_polygon_volume(gmsh: Any, polygon_fibre: ExtrudedPolygonFibre) -> int:
-    point_tags: list[int] = []
-    for point in polygon_fibre.points[:-1]:
-        point_tags.append(
-            gmsh.model.occ.addPoint(
-                float(point[0]),
-                float(point[1]),
-                polygon_fibre.z_min,
-            )
-        )
-    line_tags: list[int] = []
-    for index in range(len(point_tags)):
-        start = point_tags[index]
-        end = point_tags[(index + 1) % len(point_tags)]
-        line_tags.append(gmsh.model.occ.addLine(start, end))
-    loop = gmsh.model.occ.addCurveLoop(line_tags)
-    surface = gmsh.model.occ.addPlaneSurface([loop])
-    extruded = gmsh.model.occ.extrude(
-        [(2, surface)],
-        0.0,
-        0.0,
-        polygon_fibre.z_max - polygon_fibre.z_min,
-    )
+def _add_extruded_polygon_volume(
+    gmsh: Any,
+    points: FloatArray,
+    z_min: float,
+    z_max: float,
+) -> int:
+    surface = _add_polygon_surface(gmsh, points, z_min)
+    extruded = gmsh.model.occ.extrude([(2, surface)], 0.0, 0.0, z_max - z_min)
     volumes = [tag for dim, tag in extruded if dim == 3]
     if len(volumes) != 1:
         raise MeshingError("gmsh extrusion did not return a single fibre volume.")
@@ -280,6 +375,7 @@ def _apply_periodic_meshing(
     boundary_entities: dict[str, list[int]],
     entity_dim: int,
 ) -> None:
+    tolerance = _geometry_tolerance(geometry.domain)
     for pair in geometry.periodic_pairs:
         source_entities = boundary_entities.get(pair.source, [])
         target_entities = boundary_entities.get(pair.target, [])
@@ -288,55 +384,80 @@ def _apply_periodic_meshing(
                 "Periodic meshing requires boundary entities for "
                 f"'{pair.source}' and '{pair.target}'."
             )
-        ordered_source = _sort_periodic_entities(gmsh, source_entities, pair.source, entity_dim)
-        ordered_target = _sort_periodic_entities(gmsh, target_entities, pair.target, entity_dim)
-        if len(ordered_source) != len(ordered_target):
-            raise MeshingError(
-                "Periodic meshing requires matching entity counts for "
-                f"'{pair.source}' and '{pair.target}'."
-            )
+        targets, sources = _match_periodic_entities(
+            gmsh,
+            entity_dim,
+            source_entities,
+            target_entities,
+            pair,
+            tolerance,
+        )
         gmsh.model.mesh.setPeriodic(
             entity_dim,
-            ordered_target,
-            ordered_source,
+            targets,
+            sources,
             _affine_translation(pair.translation),
         )
 
 
-def _sort_periodic_entities(
+def _match_periodic_entities(
     gmsh: Any,
-    entity_tags: list[int],
-    boundary_name: str,
     entity_dim: int,
-) -> list[int]:
-    if entity_dim == 1:
-        if boundary_name in {"left", "right"}:
-            def key_fn(tag: int) -> tuple[float, float, float]:
-                midpoint = _entity_midpoint(gmsh, 1, tag)
-                return (midpoint[1], midpoint[0], midpoint[2])
-        else:
-            def key_fn(tag: int) -> tuple[float, float, float]:
-                midpoint = _entity_midpoint(gmsh, 1, tag)
-                return (midpoint[0], midpoint[1], midpoint[2])
-    else:
-        if boundary_name in {"left", "right"}:
-            def key_fn(tag: int) -> tuple[float, float, float]:
-                midpoint = _entity_midpoint(gmsh, 2, tag)
-                return (midpoint[1], midpoint[2], midpoint[0])
-        elif boundary_name in {"front", "back"}:
-            def key_fn(tag: int) -> tuple[float, float, float]:
-                midpoint = _entity_midpoint(gmsh, 2, tag)
-                return (midpoint[0], midpoint[2], midpoint[1])
-        else:
-            def key_fn(tag: int) -> tuple[float, float, float]:
-                midpoint = _entity_midpoint(gmsh, 2, tag)
-                return (midpoint[0], midpoint[1], midpoint[2])
-    return sorted(entity_tags, key=key_fn)
+    source_entities: list[int],
+    target_entities: list[int],
+    pair: PeriodicBoundaryPair,
+    tolerance: float,
+) -> tuple[list[int], list[int]]:
+    """Pair every target boundary piece with the source piece it is a translate of.
 
-
-def _entity_midpoint(gmsh: Any, entity_dim: int, entity_tag: int) -> tuple[float, float, float]:
-    x_min, y_min, z_min, x_max, y_max, z_max = gmsh.model.getBoundingBox(entity_dim, entity_tag)
-    return ((x_min + x_max) * 0.5, (y_min + y_max) * 0.5, (z_min + z_max) * 0.5)
+    Fibres that cross a periodic face split it into several pieces. Each target piece must
+    match exactly one source piece: same size (length or area) and a centre of mass that
+    coincides after the periodic translation. Matching is purely geometric, so it does not
+    depend on the order in which gmsh numbers the pieces.
+    """
+    translation = np.zeros(3)
+    translation[: len(pair.translation)] = pair.translation
+    source_centres = np.array(
+        [gmsh.model.occ.getCenterOfMass(entity_dim, tag) for tag in source_entities],
+        dtype=np.float64,
+    )
+    source_sizes = np.array(
+        [gmsh.model.occ.getMass(entity_dim, tag) for tag in source_entities],
+        dtype=np.float64,
+    )
+    matched_targets: list[int] = []
+    matched_sources: list[int] = []
+    used: set[int] = set()
+    unmatched: list[str] = []
+    for target in target_entities:
+        centre = np.asarray(gmsh.model.occ.getCenterOfMass(entity_dim, target))
+        size = float(gmsh.model.occ.getMass(entity_dim, target))
+        offset = np.max(np.abs(source_centres + translation - centre), axis=1)
+        size_error = np.abs(source_sizes - size)
+        candidates = np.flatnonzero(
+            (offset <= tolerance) & (size_error <= 1e-6 * max(abs(size), 1e-300) + tolerance**2)
+        )
+        if candidates.size != 1 or int(candidates[0]) in used:
+            location = ", ".join(f"{value:.6g}" for value in centre)
+            unmatched.append(f"{pair.target} piece {target} centred at ({location})")
+            continue
+        used.add(int(candidates[0]))
+        matched_targets.append(target)
+        matched_sources.append(source_entities[int(candidates[0])])
+    for index, source in enumerate(source_entities):
+        if index not in used:
+            location = ", ".join(f"{value:.6g}" for value in source_centres[index])
+            unmatched.append(f"{pair.source} piece {source} centred at ({location})")
+    if unmatched:
+        raise MeshingError(
+            f"Periodic meshing could not pair the '{pair.target}' boundary with "
+            f"'{pair.source}' (translation {pair.translation}): "
+            + "; ".join(unmatched[:6])
+            + (" ..." if len(unmatched) > 6 else "")
+            + ". The geometry is not periodic across this boundary, for example because a "
+            "fibre crosses it without its periodic image."
+        )
+    return matched_targets, matched_sources
 
 
 def _affine_translation(translation: tuple[float, ...]) -> list[float]:
